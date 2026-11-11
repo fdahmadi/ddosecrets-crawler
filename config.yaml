@@ -1,0 +1,76 @@
+# DDoSecrets mirror configuration
+# Full public archive is typically tens of TB. Prefer torrents for bulk data.
+
+mirror_root: ./mirror
+state_db: ./state/mirror.db
+catalog_db: ./state/catalog.db
+user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+
+# Domains to mirror (apex + known subdomains)
+seeds:
+  - https://ddosecrets.org/
+  - https://data.ddosecrets.org/
+  - https://torrents.ddosecrets.org/
+
+allowed_host_suffixes:
+  - ddosecrets.org
+
+# Human-like request pacing (seconds)
+polite:
+  min_delay: 3.0
+  max_delay: 12.0
+  burst_pause_every: 25
+  burst_pause_min: 20.0
+  burst_pause_max: 90.0
+  max_concurrent_http: 1
+  retry_max: 5
+  retry_backoff_base: 5.0
+  timeout: 60.0
+
+# Website HTML/page crawl (ddosecrets.org articles, categories, static assets)
+site:
+  enabled: true
+  save_html: true
+  follow_static: true
+  max_pages: 200            # batch size; continuous scheduler keeps looping
+  respect_query_params: false
+
+# HTTP file mirror for data.* directory listings
+data:
+  enabled: true
+  prefer_torrent: true      # queue magnet/torrent instead of HTTP when available
+  http_fallback: true       # if torrent missing/unavailable, download over HTTP
+  max_file_bytes: 0         # 0 = unlimited; useful for tests e.g. 104857600
+  max_indexes: 0            # 0 = unlimited directory pages; useful for tests
+  skip_extensions: []
+  recurse_directories: true
+
+# Torrent / magnet sync
+torrent:
+  enabled: true
+  magnets_csv: https://torrents.ddosecrets.org/magnets.csv
+  releases_rss: https://torrents.ddosecrets.org/releases.xml
+  site_rss: https://ddosecrets.org/feed/rss.xml
+  download_dir: ./mirror/torrents
+  aria2_rpc: null           # e.g. http://127.0.0.1:6800/jsonrpc
+  aria2_secret: null
+  use_cli: true             # spawn aria2c processes when RPC is not set
+  max_concurrent_torrents: 2
+  seed_ratio: 1.0
+  seed_time_minutes: 60
+
+# Continuous worker (VPS): keeps draining pending queues without manual restarts
+# Used by: python -m ddosecrets_crawler schedule
+schedule:
+  site_interval_hours: 6
+  data_index_interval_hours: 12
+  torrent_index_interval_hours: 6
+  full_reconcile_days: 7
+  continuous: true
+  batch_pause_seconds: 45
+  idle_sleep_seconds: 900
+
+# Logging
+logging:
+  level: INFO
+  file: ./logs/crawler.log

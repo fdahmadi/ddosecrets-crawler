@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Settings — DDoSecrets Mirror{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>Runtime config</h2>
+  <p class="desc">
+    Base file stays untouched. Edits are saved to
+    <span class="mono">*.local.yaml</span>. If that overlay exists, crawler/UI load it
+    even when you pass the base file with <span class="mono">-c</span>.
+  </p>
+  <dl class="kv" style="margin-top:1rem;">
+    <dt>Base</dt><dd class="mono">{{ base_path }}</dd>
+    <dt>Local overlay</dt><dd class="mono">{{ local_path }}</dd>
+    <dt>Active now</dt>
+    <dd>
+      <span class="mono">{{ active_path }}</span>
+      {% if using_local %}
+        <span class="chip">using .local.yaml</span>
+      {% else %}
+        <span class="chip warn">using base file</span>
+      {% endif %}
+    </dd>
+  </dl>
+</section>
+
+{% if message %}
+<section class="card" style="border-color: rgba(15,92,76,0.35);">
+  <p class="desc" style="margin:0;">{{ message }}</p>
+</section>
+{% endif %}
+{% if error %}
+<section class="card" style="border-color: rgba(153,27,27,0.35);">
+  <p class="desc" style="margin:0;color:#991b1b;">{{ error }}</p>
+</section>
+{% endif %}
+
+<div class="tabs">
+  <a class="tab {% if tab == 'form' %}active{% endif %}" href="/settings?tab=form">Form editor</a>
+  <a class="tab {% if tab == 'yaml' %}active{% endif %}" href="/settings?tab=yaml">YAML editor</a>
+</div>
+
+{% if tab == 'form' %}
+<section class="card">
+  <form method="post" action="/settings">
+    <input type="hidden" name="tab" value="form" />
+    {% for group in form_groups %}
+      <fieldset class="form-group">
+        <legend>{{ group.title }}</legend>
+        <div class="form-grid">
+          {% for field in group.fields %}
+            {% set name = (group.section ~ '.' ~ field.key) if group.section else field.key %}
+            <label class="field">
+              <span class="field-label">{{ field.label }}</span>
+              {% if field.type == 'bool' %}
+                <select name="{{ name }}">
+                  <option value="true" {% if form_values.get(name) == 'true' %}selected{% endif %}>true</option>
+                  <option value="false" {% if form_values.get(name) != 'true' %}selected{% endif %}>false</option>
+                </select>
+              {% elif field.type == 'list' %}
+                <textarea name="{{ name }}" rows="4" spellcheck="false">{{ form_values.get(name, '') }}</textarea>
+              {% elif field.type in ['int', 'float'] %}
+                <input type="number" step="{% if field.type == 'float' %}any{% else %}1{% endif %}" name="{{ name }}" value="{{ form_values.get(name, '') }}" />
+              {% else %}
+                <input type="text" name="{{ name }}" value="{{ form_values.get(name, '') }}" />
+              {% endif %}
+              <span class="field-key mono">{{ name }}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </fieldset>
+    {% endfor %}
+
+    <div class="meta" style="margin-top:1rem; gap:0.6rem;">
+      <button type="submit" name="action" value="save_form">Save form to .local.yaml</button>
+      <button type="submit" name="action" value="reset" class="btn secondary" style="background:transparent;color:var(--ink);border:1px solid var(--line);">
+        Reset overlay (use base)
+      </button>
+    </div>
+  </form>
+</section>
+{% else %}
+<section class="card">
+  <form method="post" action="/settings">
+    <input type="hidden" name="tab" value="yaml" />
+    <label for="config_text" class="meta">YAML config</label>
+    <textarea id="config_text" name="config_text" class="config-editor" spellcheck="false">{{ config_text }}</textarea>
+    <div class="meta" style="margin-top:0.9rem; gap:0.6rem;">
+      <button type="submit" name="action" value="save_yaml">Save YAML to .local.yaml</button>
+      <button type="submit" name="action" value="reset" class="btn secondary" style="background:transparent;color:var(--ink);border:1px solid var(--line);">
+        Reset overlay (use base)
+      </button>
+    </div>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,73 @@
+# Default (VPS / full): UI + continuous scheduler with config.docker.yaml
+#   docker compose up -d --build
+#   open http://localhost:8090
+#
+# Laptop preview (slow, no bulk downloads):
+#   CONFIG_NAME=config.docker.laptop.yaml docker compose up -d --build
+#
+# One-shot manual commands:
+#   docker compose --profile manual run --rm crawler run site \
+#     -c /app/config.docker.laptop.yaml --no-torrent-download
+#
+# Stop:
+#   docker compose down
+
+services:
+  ui:
+    build: .
+    image: ddosecrets-crawler:latest
+    container_name: ddosecrets-ui
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./mirror:/data/mirror
+      - ./state:/data/state
+      - ./logs:/data/logs
+      - ./config.docker.yaml:/app/config.docker.yaml:ro
+      - ./config.docker.laptop.yaml:/app/config.docker.laptop.yaml:ro
+    environment:
+      - TZ=Asia/Tehran
+    command:
+      [
+        "serve",
+        "-c",
+        "/app/${CONFIG_NAME:-config.docker.yaml}",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8090",
+      ]
+
+  # Continuous incremental crawler (torrent → data → site; drains pending queues)
+  scheduler:
+    build: .
+    image: ddosecrets-crawler:latest
+    container_name: ddosecrets-scheduler
+    restart: unless-stopped
+    volumes:
+      - ./mirror:/data/mirror
+      - ./state:/data/state
+      - ./logs:/data/logs
+      - ./config.docker.yaml:/app/config.docker.yaml:ro
+      - ./config.docker.laptop.yaml:/app/config.docker.laptop.yaml:ro
+    environment:
+      - TZ=Asia/Tehran
+    command: ["schedule", "-c", "/app/${CONFIG_NAME:-config.docker.yaml}"]
+    depends_on:
+      - ui
+
+  # One-shot / interactive crawler commands (profile: manual)
+  crawler:
+    build: .
+    image: ddosecrets-crawler:latest
+    profiles: ["manual"]
+    volumes:
+      - ./mirror:/data/mirror
+      - ./state:/data/state
+      - ./logs:/data/logs
+      - ./config.docker.yaml:/app/config.docker.yaml:ro
+      - ./config.docker.laptop.yaml:/app/config.docker.laptop.yaml:ro
+    environment:
+      - TZ=Asia/Tehran
+    command: ["status", "-c", "/app/${CONFIG_NAME:-config.docker.yaml}"]

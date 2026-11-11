@@ -1,0 +1,308 @@
+{% extends "base.html" %}
+{% block title %}Crawl Stats — DDoSecrets Mirror{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="meta" style="justify-content:space-between;align-items:center;">
+    <h2 style="margin:0;">Live crawl statistics</h2>
+    <span style="display:inline-flex;align-items:center;gap:0.75rem;flex-wrap:wrap;">
+      <button type="button" class="help-switch" data-stat-help-toggle
+              role="switch" aria-checked="false"
+              title="Show short explanations under each stat">
+        <span class="track" aria-hidden="true"></span>
+        <span>Stat help</span>
+      </button>
+      <span id="activity-chip" class="chip {% if stats.crawler_active %}live{% else %}idle{% endif %}">
+        {% if stats.crawler_active %}crawler active{% else %}idle / between requests{% endif %}
+      </span>
+    </span>
+  </div>
+  <p class="meta" style="margin-top:0.5rem;">
+    Mirror: <span class="mono">{{ mirror_root }}</span>
+    · last activity <span id="last-activity">{{ stats.last_activity_at|ts }}</span>
+    · live update every 5s (no full reload)
+  </p>
+  <p class="meta" id="activity-hint" style="margin-top:0.35rem;">
+    {% if stats.crawler_active %}
+      Saving new pages now — watch Pages / Articles tick up.
+    {% else %}
+      Idle — totals stay flat until a crawl is running.
+    {% endif %}
+  </p>
+</section>
+
+<section class="grid">
+  <div class="stat">
+    <div class="label">Pages saved</div>
+    <div class="value" id="stat-pages">{{ stats.pages_saved }}</div>
+    <div class="help">HTML/static pages written under the local site mirror.</div>
+  </div>
+  <div class="stat">
+    <div class="label">Articles</div>
+    <div class="value" id="stat-articles">{{ stats.articles_saved }}</div>
+    <div class="help">Saved /article/ pages from ddosecrets.org.</div>
+  </div>
+  <div class="stat">
+    <div class="label">Pending articles</div>
+    <div class="value" id="stat-pending-articles">{{ stats.pending_articles or 0 }}</div>
+    <div class="help">Article URLs still waiting to be crawled or revalidated.</div>
+  </div>
+  <div class="stat">
+    <div class="label">Releases</div>
+    <div class="value" id="stat-releases">{{ stats.releases_total }}</div>
+    <div class="help">Catalog entries parsed from article pages (title, countries, magnets).</div>
+  </div>
+</section>
+
+<section class="grid">
+  <div class="stat">
+    <div class="label">Pending total</div>
+    <div class="value" id="stat-pending">{{ stats.pending }}</div>
+    <div class="help">All unfinished URLs in the crawl queue (articles + other pages).</div>
+  </div>
+  <div class="stat">
+    <div class="label">Files downloaded</div>
+    <div class="value" id="stat-files">{{ stats.files_downloaded }}</div>
+    <div class="help">Dataset files fetched over HTTP (usually 0 on laptop preview).</div>
+  </div>
+  <div class="stat">
+    <div class="label">Data indexes</div>
+    <div class="value" id="stat-indexes">{{ stats.indexes_saved }}</div>
+    <div class="help">Directory listing pages mirrored from data.ddosecrets.org.</div>
+  </div>
+  <div class="stat">
+    <div class="label">Errors</div>
+    <div class="value" id="stat-errors">{{ stats.errors }}</div>
+    <div class="help">Resources that failed (HTTP errors, timeouts, etc.).</div>
+  </div>
+</section>
+
+<section class="grid">
+  <div class="stat">
+    <div class="label">Deferred torrents</div>
+    <div class="value" id="stat-deferred">{{ stats.deferred_torrent }}</div>
+    <div class="help">Data files skipped for HTTP because a magnet/torrent is preferred.</div>
+  </div>
+  <div class="stat">
+    <div class="label">Disk used</div>
+    <div class="value" style="font-size:1.25rem;" id="stat-disk">{{ stats.disk_human }}</div>
+    <div class="help">Total size of the local mirror folder on disk.</div>
+  </div>
+  <div class="stat">
+    <div class="label">Tracked bytes</div>
+    <div class="value" style="font-size:1.25rem;" id="stat-bytes">{{ stats.bytes_done_human }}</div>
+    <div class="help">Sum of content lengths recorded for finished resources.</div>
+  </div>
+  <div class="stat">
+    <div class="label">File bytes</div>
+    <div class="value" style="font-size:1.25rem;" id="stat-file-bytes">{{ stats.file_bytes_done_human }}</div>
+    <div class="help">Tracked bytes for downloaded dataset files only.</div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Recent activity</h2>
+  <table class="table">
+    <thead>
+      <tr><th>When</th><th>Kind</th><th>Status</th><th>URL</th></tr>
+    </thead>
+    <tbody id="activity-body">
+      {% for row in stats.recent_activity %}
+      <tr>
+        <td>{{ row.updated_at|ts }}</td>
+        <td><span class="badge">{{ row.kind }}</span></td>
+        <td><span class="badge {{ row.status }}">{{ row.status }}</span></td>
+        <td class="mono truncate">{{ row.url }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4">No activity yet — start a crawl.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Resources by kind / status</h2>
+  <table class="table">
+    <thead>
+      <tr><th>Kind</th><th>Status breakdown</th><th>Total</th></tr>
+    </thead>
+    <tbody id="by-kind-body">
+      {% for kind, statuses in stats.by_kind.items() %}
+      <tr>
+        <td class="mono">{{ kind }}</td>
+        <td>
+          {% for st, count in statuses.items() %}
+            <span class="badge {{ st }}">{{ st }}: {{ count }}</span>
+          {% endfor %}
+        </td>
+        <td>{{ statuses.values()|sum }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3">No resources yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Magnets</h2>
+  <div class="chips" id="magnets-chips">
+    {% for st, count in (stats.magnets or {}).items() %}
+      <span class="badge {{ st }}">{{ st }}: {{ count }}</span>
+    {% else %}
+      <span class="meta">No magnets indexed</span>
+    {% endfor %}
+  </div>
+  <p class="meta" style="margin-top:0.7rem;">Total magnets: <span id="magnets-total">{{ stats.magnets_total or 0 }}</span></p>
+</section>
+
+<section class="card">
+  <h2>Run history</h2>
+  <table class="table">
+    <thead>
+      <tr><th>ID</th><th>Mode</th><th>Started</th><th>Finished</th><th>Duration</th><th>Details</th></tr>
+    </thead>
+    <tbody id="runs-body">
+      {% for run in stats.last_runs %}
+      <tr>
+        <td class="mono">#{{ run.id }}</td>
+        <td><span class="badge">{{ run.mode }}</span></td>
+        <td>{{ run.started_at|ts }}</td>
+        <td>{{ run.finished_at|ts }}</td>
+        <td>{{ run.started_at|duration(run.finished_at) }}</td>
+        <td class="mono">{{ run.stats }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6">No runs recorded yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function fmtTs(ts) {
+  if (!ts) return '—';
+  try {
+    return new Date(Number(ts) * 1000).toLocaleString();
+  } catch (_) {
+    return '—';
+  }
+}
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+function sumValues(obj) {
+  return Object.values(obj || {}).reduce((a, b) => a + Number(b || 0), 0);
+}
+function durationLabel(started, finished) {
+  if (!started || !finished) return '—';
+  let sec = Math.max(0, Math.floor(Number(finished) - Number(started)));
+  if (sec < 60) return sec + 's';
+  const mins = Math.floor(sec / 60); sec %= 60;
+  if (mins < 60) return mins + 'm ' + sec + 's';
+  const hours = Math.floor(mins / 60);
+  return hours + 'h ' + (mins % 60) + 'm';
+}
+async function refreshStats() {
+  try {
+    const res = await fetch('/api/stats');
+    if (!res.ok) return;
+    const s = await res.json();
+    setText('stat-pages', s.pages_saved ?? 0);
+    setText('stat-articles', s.articles_saved ?? 0);
+    setText('stat-pending-articles', s.pending_articles ?? 0);
+    setText('stat-files', s.files_downloaded ?? 0);
+    setText('stat-indexes', s.indexes_saved ?? 0);
+    setText('stat-pending', s.pending ?? 0);
+    setText('stat-errors', s.errors ?? 0);
+    setText('stat-deferred', s.deferred_torrent ?? 0);
+    setText('stat-releases', s.releases_total ?? 0);
+    setText('stat-disk', s.disk_human ?? '—');
+    setText('stat-bytes', s.bytes_done_human ?? '—');
+    setText('stat-file-bytes', s.file_bytes_done_human ?? '—');
+    setText('last-activity', fmtTs(s.last_activity_at));
+    setText('magnets-total', s.magnets_total ?? 0);
+
+    const active = !!s.crawler_active;
+    const chip = document.getElementById('activity-chip');
+    if (chip) {
+      chip.textContent = active ? 'crawler active' : 'idle';
+      chip.classList.toggle('live', active);
+      chip.classList.toggle('idle', !active);
+    }
+    const hint = document.getElementById('activity-hint');
+    if (hint) {
+      hint.textContent = active
+        ? 'Saving new pages now — watch Pages / Articles tick up.'
+        : 'Idle — totals stay flat until a crawl is running.';
+    }
+
+    const act = document.getElementById('activity-body');
+    if (act) {
+      const rows = s.recent_activity || [];
+      if (!rows.length) {
+        act.innerHTML = '<tr><td colspan="4">No activity yet — start a crawl.</td></tr>';
+      } else {
+        act.innerHTML = rows.map(r => (
+          `<tr>
+            <td>${esc(fmtTs(r.updated_at))}</td>
+            <td><span class="badge">${esc(r.kind)}</span></td>
+            <td><span class="badge ${esc(r.status)}">${esc(r.status)}</span></td>
+            <td class="mono truncate">${esc(r.url)}</td>
+          </tr>`
+        )).join('');
+      }
+    }
+
+    const byKind = document.getElementById('by-kind-body');
+    if (byKind) {
+      const entries = Object.entries(s.by_kind || {});
+      if (!entries.length) {
+        byKind.innerHTML = '<tr><td colspan="3">No resources yet.</td></tr>';
+      } else {
+        byKind.innerHTML = entries.map(([kind, statuses]) => {
+          const badges = Object.entries(statuses || {}).map(
+            ([st, count]) => `<span class="badge ${esc(st)}">${esc(st)}: ${esc(count)}</span>`
+          ).join(' ');
+          return `<tr><td class="mono">${esc(kind)}</td><td>${badges}</td><td>${sumValues(statuses)}</td></tr>`;
+        }).join('');
+      }
+    }
+
+    const magnets = document.getElementById('magnets-chips');
+    if (magnets) {
+      const entries = Object.entries(s.magnets || {});
+      magnets.innerHTML = entries.length
+        ? entries.map(([st, count]) => `<span class="badge ${esc(st)}">${esc(st)}: ${esc(count)}</span>`).join('')
+        : '<span class="meta">No magnets indexed</span>';
+    }
+
+    const runs = document.getElementById('runs-body');
+    if (runs) {
+      const list = s.last_runs || [];
+      if (!list.length) {
+        runs.innerHTML = '<tr><td colspan="6">No runs recorded yet.</td></tr>';
+      } else {
+        runs.innerHTML = list.map(run => (
+          `<tr>
+            <td class="mono">#${esc(run.id)}</td>
+            <td><span class="badge">${esc(run.mode)}</span></td>
+            <td>${esc(fmtTs(run.started_at))}</td>
+            <td>${esc(fmtTs(run.finished_at))}</td>
+            <td>${esc(durationLabel(run.started_at, run.finished_at))}</td>
+            <td class="mono">${esc(JSON.stringify(run.stats || {}))}</td>
+          </tr>`
+        )).join('');
+      }
+    }
+  } catch (_) {}
+}
+setInterval(refreshStats, 5000);
+</script>
+{% endblock %}

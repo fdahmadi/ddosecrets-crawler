@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}DDoSecrets Mirror{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/app.css" />
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div>
+        <a class="brand" href="/">DDoSecrets <span>Mirror</span></a>
+        <div class="sub">Local catalog + crawl stats · UI and crawler can run together</div>
+      </div>
+      <nav>
+        <a href="/" class="{% if request.url.path == '/' %}active{% endif %}">Overview</a>
+        <a href="/stats" class="{% if request.url.path.startswith('/stats') %}active{% endif %}">Crawl Stats</a>
+        <a href="/domains" class="{% if request.url.path.startswith('/domains') %}active{% endif %}">Domains</a>
+        <a href="/releases" class="{% if request.url.path.startswith('/releases') %}active{% endif %}">Releases</a>
+        <a href="/magnets" class="{% if request.url.path.startswith('/magnets') %}active{% endif %}">Magnets</a>
+        <a href="/settings" class="{% if request.url.path.startswith('/settings') %}active{% endif %}">Settings</a>
+        <a href="/files/" class="{% if request.url.path.startswith('/files') %}active{% endif %}">Files</a>
+      </nav>
+    </header>
+    {% block content %}{% endblock %}
+    <footer class="footer">
+      Local-only UI over SQLite state + mirrored files. Not affiliated with DDoSecrets.
+    </footer>
+  </div>
+  <script>
+  (function () {
+    var KEY = "ddosecrets-stat-help";
+    function apply(on) {
+      document.body.classList.toggle("show-stat-help", !!on);
+      document.querySelectorAll("[data-stat-help-toggle]").forEach(function (el) {
+        el.setAttribute("aria-checked", on ? "true" : "false");
+      });
+    }
+    function toggleFrom(btn) {
+      var next = btn.getAttribute("aria-checked") !== "true";
+      localStorage.setItem(KEY, next ? "1" : "0");
+      apply(next);
+    }
+    apply(localStorage.getItem(KEY) === "1");
+    document.addEventListener("click", function (ev) {
+      var btn = ev.target && ev.target.closest
+        ? ev.target.closest("[data-stat-help-toggle]")
+        : null;
+      if (!btn) return;
+      ev.preventDefault();
+      toggleFrom(btn);
+    });
+    document.addEventListener("keydown", function (ev) {
+      var btn = ev.target && ev.target.closest
+        ? ev.target.closest("[data-stat-help-toggle]")
+        : null;
+      if (!btn) return;
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      ev.preventDefault();
+      toggleFrom(btn);
+    });
+  })();
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

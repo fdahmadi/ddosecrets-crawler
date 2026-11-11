@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Files{% if rel %} — {{ rel }}{% endif %} — DDoSecrets Mirror{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="meta" style="justify-content:space-between;align-items:center;">
+    <h2 style="margin:0;">Mirror files</h2>
+    <span class="chip">{{ entries|length }} item(s)</span>
+  </div>
+  <p class="meta" style="margin-top:0.5rem;">
+    Browsing <span class="mono">{{ mirror_root }}{% if rel %}/{{ rel }}{% endif %}</span>
+  </p>
+  <p class="meta" style="margin-top:0.35rem;">
+    <a href="/files/">mirror/</a>
+    {% for c in crumbs %}
+      <span>/</span> <a href="{{ c.href }}">{{ c.name }}</a>
+    {% endfor %}
+  </p>
+  {% if index_href %}
+  <p class="meta" style="margin-top:0.55rem;">
+    <a class="btn secondary" href="{{ index_href }}" target="_blank" rel="noopener">Open index.html</a>
+    <span>Folders always list files here — open the index only when you want the mirrored page.</span>
+  </p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <table class="table">
+    <thead>
+      <tr><th>Name</th><th>Type</th><th>Size</th></tr>
+    </thead>
+    <tbody>
+      {% if parent_href %}
+      <tr>
+        <td class="mono"><a href="{{ parent_href }}">../</a></td>
+        <td><span class="badge">dir</span></td>
+        <td>—</td>
+      </tr>
+      {% endif %}
+      {% for e in entries %}
+      <tr>
+        <td class="mono"><a href="{{ e.href }}">{{ e.name }}</a></td>
+        <td><span class="badge">{% if e.is_dir %}dir{% else %}file{% endif %}</span></td>
+        <td>{{ e.size_human }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3">This folder is empty — wait for the crawler to save files.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

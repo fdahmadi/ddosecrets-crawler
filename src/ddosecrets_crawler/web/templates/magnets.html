@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Magnets — DDoSecrets Mirror{% endblock %}
+{% block content %}
+<section class="grid">
+  {% for key, value in status_counts.items() %}
+    <div class="stat">
+      <div class="label">{{ key }}</div>
+      <div class="value">{{ value }}</div>
+    </div>
+  {% else %}
+    <div class="stat"><div class="label">Magnets</div><div class="value">0</div></div>
+  {% endfor %}
+</section>
+
+<form class="search" method="get" action="/magnets" style="grid-template-columns: 1.5fr 1fr auto;">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search title or infohash…" />
+  <select name="status">
+    <option value="">All statuses</option>
+    {% for key in status_counts.keys() %}
+      <option value="{{ key }}" {% if status == key %}selected{% endif %}>{{ key }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Filter</button>
+</form>
+
+<p class="meta">Showing {{ count }} magnet(s)</p>
+
+<table class="table">
+  <thead>
+    <tr>
+      <th>Title</th>
+      <th>Status</th>
+      <th>Infohash</th>
+      <th>Local path</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for item in items %}
+      <tr>
+        <td>{{ item.title or '—' }}</td>
+        <td><span class="badge {{ item.status }}">{{ item.status }}</span></td>
+        <td class="mono"><a href="{{ item.magnet }}">{{ item.infohash }}</a></td>
+        <td class="mono">{{ item.local_path or '—' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4">No magnets found.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

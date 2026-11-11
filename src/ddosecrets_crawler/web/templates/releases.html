@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Releases — DDoSecrets Mirror{% endblock %}
+{% block content %}
+<form class="search" method="get" action="/releases">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search title, description, slug…" />
+  <select name="country">
+    <option value="">All countries</option>
+    {% for c in countries %}
+      <option value="{{ c }}" {% if country == c %}selected{% endif %}>{{ c }}</option>
+    {% endfor %}
+  </select>
+  <select name="type">
+    <option value="">All types</option>
+    {% for t in types %}
+      <option value="{{ t }}" {% if type == t %}selected{% endif %}>{{ t }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Search</button>
+</form>
+
+<p class="meta">Showing {{ count }} release(s)</p>
+
+{% for item in items %}
+  <article class="card">
+    <h3><a href="/releases/{{ item.slug }}">{{ item.title }}</a></h3>
+    <div class="meta">
+      <span>{{ item.published_at or 'unknown date' }}</span>
+      <span>{{ item.download_size_human }}</span>
+      {% if item.has_local_html %}<span class="chip">local HTML</span>{% else %}<span class="chip warn">HTML pending</span>{% endif %}
+      <span>{{ item.magnets|length }} magnet(s)</span>
+    </div>
+    <p class="desc">{{ item.description[:280] }}{% if item.description|length > 280 %}…{% endif %}</p>
+    <div class="chips">
+      {% for c in item.countries %}<span class="chip">{{ c }}</span>{% endfor %}
+      {% for t in item.types %}<span class="chip">{{ t }}</span>{% endfor %}
+    </div>
+  </article>
+{% else %}
+  <div class="card"><p>No matching releases.</p></div>
+{% endfor %}
+{% endblock %}

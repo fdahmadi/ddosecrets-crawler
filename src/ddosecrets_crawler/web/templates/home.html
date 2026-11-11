@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block title %}Overview — DDoSecrets Mirror{% endblock %}
+{% block content %}
+<section class="card" style="margin-bottom:1rem;">
+  <div class="meta" style="justify-content:space-between;align-items:center;">
+    <span>Live overview · numbers update quietly every 5s</span>
+    <span style="display:inline-flex;align-items:center;gap:0.75rem;flex-wrap:wrap;">
+      <button type="button" class="help-switch" data-stat-help-toggle
+              role="switch" aria-checked="false"
+              title="Show short explanations under each stat">
+        <span class="track" aria-hidden="true"></span>
+        <span>Stat help</span>
+      </button>
+      <span id="activity-chip" class="chip {% if stats.crawler_active %}live{% else %}idle{% endif %}">
+        {% if stats.crawler_active %}crawler active{% else %}idle / between requests{% endif %}
+      </span>
+    </span>
+  </div>
+</section>
+
+<section class="grid">
+  <div class="stat">
+    <div class="label">Releases</div>
+    <div class="value" id="stat-releases">{{ stats.releases_total or 0 }}</div>
+    <div class="help">Catalog entries parsed from article pages (title, countries, magnets).</div>
+  </div>
+  <div class="stat">
+    <div class="label">Pages saved</div>
+    <div class="value" id="stat-pages">{{ stats.pages_saved or 0 }}</div>
+    <div class="help">HTML/static pages written under the local site mirror.</div>
+  </div>
+  <div class="stat">
+    <div class="label">Files downloaded</div>
+    <div class="value" id="stat-files">{{ stats.files_downloaded or 0 }}</div>
+    <div class="help">Dataset files fetched over HTTP (usually 0 on laptop preview).</div>
+  </div>
+  <div class="stat">
+    <div class="label">Pending queue</div>
+    <div class="value" id="stat-pending">{{ stats.pending or 0 }}</div>
+    <div class="help">URLs discovered but not finished yet (still to crawl or revalidate).</div>
+  </div>
+</section>
+
+<section class="grid">
+  <div class="stat">
+    <div class="label">Articles</div>
+    <div class="value" id="stat-articles">{{ stats.articles_saved or 0 }}</div>
+    <div class="help">Saved /article/ pages from ddosecrets.org.</div>
+  </div>
+  <div class="stat">
+    <div class="label">Data indexes</div>
+    <div class="value" id="stat-indexes">{{ stats.indexes_saved or 0 }}</div>
+    <div class="help">Directory listing pages mirrored from data.ddosecrets.org.</div>
+  </div>
+  <div class="stat">
+    <div class="label">Magnets queued</div>
+    <div class="value" id="stat-magnets-queued">{% if stats.magnets %}{{ stats.magnets.get('queued', 0) }}{% else %}0{% endif %}</div>
+    <div class="help">Magnet links waiting for download (stay queued while torrent downloads are off).</div>
+  </div>
+  <div class="stat">
+    <div class="label">Errors</div>
+    <div class="value" id="stat-errors">{{ stats.errors or 0 }}</div>
+    <div class="help">Resources that failed (HTTP errors, timeouts, etc.).</div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="meta" style="justify-content:space-between;">
+    <h2 style="margin:0;">Crawl snapshot</h2>
+    <span class="chip">last activity <span id="last-activity">{{ stats.last_activity_at|ts }}</span></span>
+  </div>
+  <dl class="kv" style="margin-top:0.9rem;">
+    <dt>Mirror disk</dt><dd id="stat-disk">{{ stats.disk_human }}</dd>
+    <dt>Tracked bytes</dt><dd id="stat-bytes">{{ stats.bytes_done_human }} <span class="meta">(pages <span id="stat-page-bytes">{{ stats.page_bytes_done_human }}</span> · files <span id="stat-file-bytes">{{ stats.file_bytes_done_human }}</span>)</span></dd>
+    <dt>Deferred torrents</dt><dd id="stat-deferred">{{ stats.deferred_torrent or 0 }}</dd>
+    <dt>Magnets total</dt><dd id="stat-magnets-total">{{ stats.magnets_total or 0 }}</dd>
+    <dt>Mirror root</dt><dd class="mono">{{ mirror_root }}</dd>
+  </dl>
+  <p class="meta" style="margin-top:1rem;">
+    <a class="btn" href="/stats">Full crawl stats</a>
+    <a class="btn secondary" href="/domains">Crawled domains</a>
+    <a class="btn secondary" href="/releases">Browse releases</a>
+    <a class="btn secondary" href="/magnets">Magnet queue</a>
+    <a class="btn secondary" href="/files/site/ddosecrets.org/index.html" target="_blank" rel="noopener">Open mirrored site</a>
+  </p>
+</section>
+
+{% if stats.last_runs %}
+<section class="card">
+  <h2>Recent runs</h2>
+  <table class="table">
+    <thead>
+      <tr><th>ID</th><th>Mode</th><th>Started</th><th>Duration</th><th>Summary</th></tr>
+    </thead>
+    <tbody>
+      {% for run in stats.last_runs[:5] %}
+      <tr>
+        <td class="mono">#{{ run.id }}</td>
+        <td><span class="badge">{{ run.mode }}</span></td>
+        <td>{{ run.started_at|ts }}</td>
+        <td>{{ run.started_at|duration(run.finished_at) }}</td>
+        <td class="mono">
+          {% if run.stats.site %}site={{ run.stats.site }} {% endif %}
+          {% if run.stats.data %}data={{ run.stats.data }} {% endif %}
+          {% if run.stats.torrent_index %}torrents={{ run.stats.torrent_index }} {% endif %}
+          {% if not run.stats.site and not run.stats.data and not run.stats.torrent_index %}{{ run.stats.keys()|list }}{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<h2>Recent releases</h2>
+{% for item in recent %}
+  <article class="card">
+    <h3><a href="/releases/{{ item.slug }}">{{ item.title }}</a></h3>
+    <div class="meta">
+      <span>{{ item.published_at or 'unknown date' }}</span>
+      <span>{{ item.download_size_human }}</span>
+      {% if item.has_local_html %}<span class="chip">local HTML</span>{% endif %}
+      {% if item.magnets %}<span class="chip warn">{{ item.magnets|length }} magnet(s)</span>{% endif %}
+    </div>
+    <p class="desc">{{ item.description[:260] }}{% if item.description|length > 260 %}…{% endif %}</p>
+    <div class="chips">
+      {% for c in item.countries %}<span class="chip">{{ c }}</span>{% endfor %}
+      {% for t in item.types %}<span class="chip">{{ t }}</span>{% endfor %}
+    </div>
+  </article>
+{% else %}
+  <div class="card"><p>No releases in catalog yet. Run a site crawl first.</p></div>
+{% endfor %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function fmtTs(ts) {
+  if (!ts) return '—';
+  try { return new Date(Number(ts) * 1000).toLocaleString(); } catch (_) { return '—'; }
+}
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+async function refreshStats() {
+  try {
+    const res = await fetch('/api/stats');
+    if (!res.ok) return;
+    const s = await res.json();
+    setText('stat-releases', s.releases_total ?? 0);
+    setText('stat-pages', s.pages_saved ?? 0);
+    setText('stat-files', s.files_downloaded ?? 0);
+    setText('stat-pending', s.pending ?? 0);
+    setText('stat-articles', s.articles_saved ?? 0);
+    setText('stat-indexes', s.indexes_saved ?? 0);
+    setText('stat-errors', s.errors ?? 0);
+    setText('stat-disk', s.disk_human ?? '—');
+    setText('stat-page-bytes', s.page_bytes_done_human ?? '—');
+    setText('stat-file-bytes', s.file_bytes_done_human ?? '—');
+    setText('stat-deferred', s.deferred_torrent ?? 0);
+    setText('stat-magnets-total', s.magnets_total ?? 0);
+    setText('stat-magnets-queued', (s.magnets && s.magnets.queued) ? s.magnets.queued : 0);
+    setText('last-activity', fmtTs(s.last_activity_at));
+    const bytes = document.getElementById('stat-bytes');
+    if (bytes) {
+      bytes.innerHTML = `${s.bytes_done_human || '—'} <span class="meta">(pages <span id="stat-page-bytes">${s.page_bytes_done_human || '—'}</span> · files <span id="stat-file-bytes">${s.file_bytes_done_human || '—'}</span>)</span>`;
+    }
+    const chip = document.getElementById('activity-chip');
+    if (chip) {
+      const active = !!s.crawler_active;
+      chip.textContent = active ? 'crawler active' : 'idle / between requests';
+      chip.classList.toggle('live', active);
+      chip.classList.toggle('idle', !active);
+    }
+  } catch (_) {}
+}
+setInterval(refreshStats, 5000);
+</script>
+{% endblock %}

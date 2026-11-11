@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Domains — DDoSecrets Mirror{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="meta" style="justify-content:space-between;align-items:center;">
+    <h2 style="margin:0;">Crawled domains</h2>
+    <span class="chip">{{ count }} host(s)</span>
+  </div>
+  <p class="meta" style="margin-top:0.5rem;">
+    Click a domain to open its local mirror under <span class="mono">{{ mirror_root }}</span>.
+  </p>
+</section>
+
+{% for d in domains %}
+<article class="card domain-card">
+  <div class="domain-head">
+    <div>
+      <h3 style="margin:0;">
+        {% if d.open_url %}
+          <a href="{{ d.open_url }}" target="_blank" rel="noopener">{{ d.host }}</a>
+        {% else %}
+          {{ d.host }}
+        {% endif %}
+      </h3>
+      <div class="meta" style="margin-top:0.35rem;">
+        <span class="badge">{{ d.section }}</span>
+        {% if d.has_mirror %}<span class="chip">mirrored</span>{% else %}<span class="chip warn">no local files yet</span>{% endif %}
+        <span>{{ d.disk_human }} on disk</span>
+        {% if d.source_url %}<a href="{{ d.source_url }}" target="_blank" rel="noopener">source</a>{% endif %}
+      </div>
+    </div>
+    <div class="domain-actions">
+      {% if d.open_url %}
+        <a class="btn" href="{{ d.open_url }}" target="_blank" rel="noopener">Open mirror</a>
+        {% if d.browse_url %}<a class="btn secondary" href="{{ d.browse_url }}" target="_blank" rel="noopener">Browse files</a>{% endif %}
+      {% else %}
+        <span class="chip warn">crawl this host first</span>
+      {% endif %}
+    </div>
+  </div>
+  <dl class="kv" style="margin-top:0.9rem;">
+    <dt>Done</dt><dd>{{ d.done }}</dd>
+    <dt>Pending</dt><dd>{{ d.pending }}</dd>
+    <dt>Errors</dt><dd>{{ d.errors }}</dd>
+    <dt>Tracked URLs</dt><dd>{{ d.total }}</dd>
+    {% if d.magnets_total is not none %}<dt>Magnets indexed</dt><dd>{{ d.magnets_total }}</dd>{% endif %}
+    {% if d.local_path %}<dt>Local path</dt><dd class="mono">{{ d.local_path }}</dd>{% endif %}
+  </dl>
+</article>
+{% else %}
+<section class="card">
+  <p>No domains discovered yet. Run a site or data crawl first.</p>
+</section>
+{% endfor %}
+{% endblock %}

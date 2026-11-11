@@ -1,0 +1,68 @@
+# Docker / VPS full config — paths inside the container
+# Host directories are mounted to /data via docker-compose
+
+mirror_root: /data/mirror
+state_db: /data/state/mirror.db
+catalog_db: /data/state/catalog.db
+user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+
+seeds:
+  - https://ddosecrets.org/
+  - https://data.ddosecrets.org/
+  - https://torrents.ddosecrets.org/
+
+allowed_host_suffixes:
+  - ddosecrets.org
+
+polite:
+  min_delay: 3.0
+  max_delay: 12.0
+  burst_pause_every: 25
+  burst_pause_min: 20.0
+  burst_pause_max: 90.0
+  max_concurrent_http: 1
+  retry_max: 5
+  retry_backoff_base: 5.0
+  timeout: 60.0
+
+site:
+  enabled: true
+  save_html: true
+  follow_static: true
+  max_pages: 0
+  respect_query_params: false
+
+data:
+  enabled: true
+  prefer_torrent: true
+  http_fallback: true
+  max_file_bytes: 0
+  max_indexes: 0
+  skip_extensions: []
+  recurse_directories: true
+
+torrent:
+  enabled: true
+  magnets_csv: https://torrents.ddosecrets.org/magnets.csv
+  releases_rss: https://torrents.ddosecrets.org/releases.xml
+  site_rss: https://ddosecrets.org/feed/rss.xml
+  download_dir: /data/mirror/torrents
+  aria2_rpc: null
+  aria2_secret: null
+  use_cli: true
+  max_concurrent_torrents: 2
+  seed_ratio: 1.0
+  seed_time_minutes: 60
+
+schedule:
+  site_interval_hours: 6
+  data_index_interval_hours: 12
+  torrent_index_interval_hours: 6
+  full_reconcile_days: 7
+  continuous: true
+  batch_pause_seconds: 45
+  idle_sleep_seconds: 900
+
+logging:
+  level: INFO
+  file: /data/logs/crawler.log

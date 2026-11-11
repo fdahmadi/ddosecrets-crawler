@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}{{ item.title }} — DDoSecrets Mirror{% endblock %}
+{% block content %}
+<article class="card">
+  <h2>{{ item.title }}</h2>
+  <div class="meta">
+    <span>{{ item.published_at or 'unknown date' }}</span>
+    <span>{{ item.download_size_human }}</span>
+    {% if item.source %}<span>source: {{ item.source }}</span>{% endif %}
+  </div>
+  <p class="desc">{{ item.description }}</p>
+  <div class="chips">
+    {% for c in item.countries %}<span class="chip">{{ c }}</span>{% endfor %}
+    {% for t in item.types %}<span class="chip">{{ t }}</span>{% endfor %}
+  </div>
+
+  <hr style="border:0;border-top:1px solid var(--line);margin:1.1rem 0;" />
+
+  <dl class="kv">
+    <dt>Slug</dt><dd class="mono">{{ item.slug }}</dd>
+    <dt>Original</dt>
+    <dd>{% if item.article_url %}<a href="{{ item.article_url }}" target="_blank" rel="noopener">{{ item.article_url }}</a>{% else %}—{% endif %}</dd>
+    <dt>Local HTML</dt>
+    <dd>
+      {% if item.local_html_url %}
+        <a href="{{ item.local_html_url }}" target="_blank" rel="noopener">Open mirrored page</a>
+      {% else %}
+        Not crawled yet
+      {% endif %}
+    </dd>
+  </dl>
+
+  <h3 style="margin-top:1.2rem;">Download links</h3>
+  <div class="links">
+    {% for u in item.downloads %}<a href="{{ u }}" target="_blank" rel="noopener">{{ u }}</a><br/>{% else %}<span class="meta">No HTTP download links</span>{% endfor %}
+  </div>
+
+  <h3 style="margin-top:1.2rem;">Torrents</h3>
+  <div class="links">
+    {% for u in item.torrents %}<a href="{{ u }}" target="_blank" rel="noopener">{{ u }}</a><br/>{% else %}<span class="meta">No .torrent links</span>{% endfor %}
+  </div>
+
+  <h3 style="margin-top:1.2rem;">Magnets</h3>
+  {% if item.magnets %}
+    <table class="table">
+      <thead>
+        <tr><th>Status</th><th>Infohash / path</th><th>Magnet</th></tr>
+      </thead>
+      <tbody>
+        {% for m in magnet_rows %}
+          <tr>
+            <td><span class="badge {{ m.status }}">{{ m.status }}</span></td>
+            <td class="mono">{{ m.infohash }}{% if m.local_path %}<br/>{{ m.local_path }}{% endif %}</td>
+            <td class="mono"><a href="{{ m.magnet }}">open magnet</a></td>
+          </tr>
+        {% else %}
+          {% for mag in item.magnets %}
+            <tr>
+              <td><span class="badge">listed</span></td>
+              <td class="mono">—</td>
+              <td class="mono"><a href="{{ mag }}">open magnet</a></td>
+            </tr>
+          {% endfor %}
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="meta">No magnets for this release.</p>
+  {% endif %}
+
+  <p style="margin-top:1.2rem;">
+    <a class="btn secondary" href="/releases">Back to releases</a>
+  </p>
+</article>
+{% endblock %}
