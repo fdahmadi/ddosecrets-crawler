@@ -22,15 +22,16 @@ RUN pip install --upgrade pip \
 
 COPY config.yaml config.laptop.yaml config.docker.yaml config.docker.laptop.yaml ./
 COPY scripts ./scripts
+COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-RUN mkdir -p /data/staging /data/logs \
+RUN chmod 755 /usr/local/bin/docker-entrypoint.sh \
+    && mkdir -p /data/staging /data/logs \
     && useradd --create-home --uid 1000 crawler \
     && chown -R crawler:crawler /app /data
 
-USER crawler
 WORKDIR /app
 
 VOLUME ["/data/staging", "/data/logs"]
 
-ENTRYPOINT ["python", "-m", "ddosecrets_crawler"]
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["status", "-c", "/app/config.docker.yaml"]

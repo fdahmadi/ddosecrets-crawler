@@ -1,11 +1,16 @@
-# Crawler + UI. PostgreSQL and MinIO are expected on separate servers —
-# pass connection details via environment (or edit config.docker*.yaml).
+# Crawler + UI. PostgreSQL and MinIO are expected on separate servers.
+# Config YAML is baked into the image. Connection details come from .env
+# (DATABASE_URL, MINIO_*, STORAGE_BACKEND) and override the YAML.
 #
-#   docker compose up -d --build
+# Server (compose file + .env only, image already present):
+#   docker compose up -d
 #   open http://localhost:8090
 #
-# Laptop preview:
-#   CONFIG_NAME=config.docker.laptop.yaml docker compose up -d --build
+# Build on a machine that has the source tree:
+#   docker compose up -d --build
+#
+# Laptop preview (image must contain config.docker.laptop.yaml):
+#   CONFIG_NAME=config.docker.laptop.yaml docker compose up -d
 #
 # Required env (example .env):
 #   DATABASE_URL=postgresql://user:pass@db-host:5432/ddosecrets
@@ -28,8 +33,6 @@ services:
     volumes:
       - ./staging:/data/staging
       - ./logs:/data/logs
-      - ./config.docker.yaml:/app/config.docker.yaml:ro
-      - ./config.docker.laptop.yaml:/app/config.docker.laptop.yaml:ro
     environment:
       - TZ=Asia/Tehran
       - DATABASE_URL=${DATABASE_URL:-}
@@ -57,8 +60,6 @@ services:
     volumes:
       - ./staging:/data/staging
       - ./logs:/data/logs
-      - ./config.docker.yaml:/app/config.docker.yaml:ro
-      - ./config.docker.laptop.yaml:/app/config.docker.laptop.yaml:ro
     environment:
       - TZ=Asia/Tehran
       - DATABASE_URL=${DATABASE_URL:-}
@@ -78,8 +79,6 @@ services:
     volumes:
       - ./staging:/data/staging
       - ./logs:/data/logs
-      - ./config.docker.yaml:/app/config.docker.yaml:ro
-      - ./config.docker.laptop.yaml:/app/config.docker.laptop.yaml:ro
     environment:
       - TZ=Asia/Tehran
       - DATABASE_URL=${DATABASE_URL:-}

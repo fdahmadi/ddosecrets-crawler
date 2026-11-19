@@ -1,6 +1,7 @@
 services:
   minio:
-    image: minio/minio:latest
+    # Docker Hub minio/minio is gone; official images live on Quay
+    image: quay.io/minio/minio:latest
     container_name: ddosecrets-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -15,7 +16,7 @@ services:
 
   # One-shot: create the mirror bucket after MinIO is up
   minio-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     container_name: ddosecrets-minio-init
     depends_on:
       minio:
