@@ -11,12 +11,12 @@ from .db import StateDB
 from .http_client import PoliteHttpClient
 from .metadata import extract_article_metadata, store_article_metadata
 from .html_rewrite import rewrite_html_links
+from .storage import MirrorStorage, mirror_object_key
 from .urls import (
     absolutize,
     host_of,
     is_allowed_host,
     is_probably_html,
-    mirror_local_path,
     normalize_url,
     sha256_bytes,
 )
@@ -32,10 +32,17 @@ SKIP_PREFIXES = (
 
 
 class SiteCrawler:
-    def __init__(self, cfg: AppConfig, db: StateDB, http: PoliteHttpClient):
+    def __init__(
+        self,
+        cfg: AppConfig,
+        db: StateDB,
+        http: PoliteHttpClient,
+        storage: MirrorStorage,
+    ):
         self.cfg = cfg
         self.db = db
         self.http = http
+        self.storage = storage
         self.stats = {
             "visited": 0,
             "saved": 0,
@@ -82,13 +89,20 @@ class SiteCrawler:
                 return True
             # Laptop-friendly: always pull CSS/JS/favicon so offline pages keep style
             lower = path.lower()
-            return lower.endswith((".css", ".js", ".ico", ".png", ".svg", ".woff", ".woff2"))
+            return lower.endswith(
+                (".css", ".js", ".ico", ".png", ".svg", ".woff", ".woff2")
+            )
         return True
 
     def _extract_links(self, base_url: str, html: str) -> list[str]:
         soup = BeautifulSoup(html, "lxml")
         out: list[str] = []
-        for tag, attr in (("a", "href"), ("link", "href"), ("script", "src"), ("img", "src")):
+        for tag, attr in (
+            ("a", "href"),
+            ("link", "href"),
+            ("script", "src"),
+            ("img", "src"),
+        ):
             for el in soup.find_all(tag):
                 href = el.get(attr)
                 abs_url = absolutize(base_url, href) if href else None
@@ -194,13 +208,9 @@ class SiteCrawler:
             )
             return
 
-        local = mirror_local_path(self.cfg.mirror_path, url, section="site")
+        key = mirror_object_key(url, section="site")
         content_hash = sha256_bytes(result.content)
-        if (
-            existing
-            and existing["sha256"] == content_hash
-            and local.exists()
-        ):
+        if existing and existing["sha256"] == content_hash and self.storage.exists(key):
             self.stats["skipped"] += 1
             self.db.touch_resource(
                 url,
@@ -218,16 +228,19 @@ class SiteCrawler:
         html_text = result.text if is_probably_html(result.content_type, url) else None
 
         if self.cfg.site.save_html:
-            local.parent.mkdir(parents=True, exist_ok=True)
             if html_text is not None:
                 rewritten = rewrite_html_links(
                     html_text,
                     page_url=result.final_url or url,
                     allowed_host_suffixes=self.cfg.allowed_host_suffixes,
                 )
-                local.write_text(rewritten, encoding="utf-8")
+                self.storage.put_text(
+                    key, rewritten, content_type="text/html; charset=utf-8"
+                )
             else:
-                local.write_bytes(result.content)
+                self.storage.put_bytes(
+                    key, result.content, content_type=result.content_type
+                )
             self.stats["saved"] += 1
 
         if path.startswith("/article/") and html_text is not None:
@@ -235,13 +248,13 @@ class SiteCrawler:
             meta = extract_article_metadata(url, html_text)
             store_article_metadata(self.db, meta)
             self.stats["articles"] += 1
-            # Export per-article JSON sidecar
-            sidecar = self.cfg.mirror_path / "metadata" / "articles" / f"{meta['slug']}.json"
-            sidecar.parent.mkdir(parents=True, exist_ok=True)
             import json
 
-            sidecar.write_text(
-                json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+            sidecar_key = f"metadata/articles/{meta['slug']}.json"
+            self.storage.put_text(
+                sidecar_key,
+                json.dumps(meta, ensure_ascii=False, indent=2),
+                content_type="application/json; charset=utf-8",
             )
         elif path.startswith("/static/"):
             kind = "static"
@@ -252,7 +265,7 @@ class SiteCrawler:
             url=url,
             kind=kind,
             host=host_of(url),
-            local_path=str(local),
+            local_path=key,
             content_type=result.content_type,
             etag=result.etag,
             last_modified=result.last_modified,

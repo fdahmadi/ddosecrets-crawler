@@ -6,6 +6,7 @@ dist/
 build/
 mirror/
 state/
+staging/
 logs/
 *.part
 .DS_Store

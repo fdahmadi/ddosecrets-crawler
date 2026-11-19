@@ -12,8 +12,8 @@ from .config import AppConfig
 from .db import StateDB, url_needs_download
 from .html_rewrite import rewrite_html_links
 from .http_client import PoliteHttpClient
+from .storage import MirrorStorage, data_file_object_key, normalize_key
 from .urls import (
-    data_file_local_path,
     host_of,
     is_allowed_host,
     magnet_infohash,
@@ -24,9 +24,7 @@ from .urls import (
 
 log = logging.getLogger(__name__)
 
-SIZE_RE = re.compile(
-    r"^([\d.]+)\s*(B|KiB|MiB|GiB|TiB|KB|MB|GB|TB)$", re.I
-)
+SIZE_RE = re.compile(r"^([\d.]+)\s*(B|KiB|MiB|GiB|TiB|KB|MB|GB|TB)$", re.I)
 
 
 @dataclass
@@ -43,10 +41,17 @@ class ListingEntry:
 class DataMirror:
     """Recursively mirror nginx-style directory indexes on data.* hosts."""
 
-    def __init__(self, cfg: AppConfig, db: StateDB, http: PoliteHttpClient):
+    def __init__(
+        self,
+        cfg: AppConfig,
+        db: StateDB,
+        http: PoliteHttpClient,
+        storage: MirrorStorage,
+    ):
         self.cfg = cfg
         self.db = db
         self.http = http
+        self.storage = storage
         self.stats = {
             "indexes": 0,
             "files_downloaded": 0,
@@ -81,7 +86,11 @@ class DataMirror:
                 continue
             href = link["href"]
             name = unquote(link.get_text(strip=True) or href)
-            if name in (".", "..") or href in ("../", "./") or "Parent directory" in name:
+            if (
+                name in (".", "..")
+                or href in ("../", "./")
+                or "Parent directory" in name
+            ):
                 continue
             abs_url = urljoin(base_url, href)
             if not is_allowed_host(abs_url, self.cfg.allowed_host_suffixes):
@@ -113,7 +122,11 @@ class DataMirror:
             entries.append(
                 ListingEntry(
                     name=name.rstrip("/"),
-                    href=normalize_url(abs_url if not is_dir else (abs_url if abs_url.endswith("/") else abs_url + "/")),
+                    href=normalize_url(
+                        abs_url
+                        if not is_dir
+                        else (abs_url if abs_url.endswith("/") else abs_url + "/")
+                    ),
                     is_dir=is_dir,
                     size=size,
                     date=date,
@@ -163,31 +176,23 @@ class DataMirror:
             return
 
         # Save index HTML for offline browsing
-        local_index = data_file_local_path(
-            self.cfg.mirror_path,
-            index_url if index_url.endswith("/") else index_url + "/",
-        )
-        # data_file_local_path for trailing slash ends without filename; fix:
-        if index_url.endswith("/"):
-            local_index = (
-                self.cfg.mirror_path
-                / "data"
-                / host_of(index_url)
-                / urlparse(index_url).path.lstrip("/")
-                / "index.html"
-            )
-        local_index.parent.mkdir(parents=True, exist_ok=True)
+        index_page = index_url if index_url.endswith("/") else index_url + "/"
+        index_key = data_file_object_key(index_page)
+        if not index_key.endswith("index.html"):
+            index_key = normalize_key(index_key.rstrip("/") + "/index.html")
         rewritten = rewrite_html_links(
             result.text,
-            page_url=index_url if index_url.endswith("/") else index_url + "/",
+            page_url=index_page,
             allowed_host_suffixes=self.cfg.allowed_host_suffixes,
         )
-        local_index.write_text(rewritten, encoding="utf-8")
+        self.storage.put_text(
+            index_key, rewritten, content_type="text/html; charset=utf-8"
+        )
         self.db.upsert_resource(
             url=index_url,
             kind="data_index",
             host=host_of(index_url),
-            local_path=str(local_index),
+            local_path=index_key,
             content_type=result.content_type,
             etag=result.etag,
             last_modified=result.last_modified,
@@ -274,9 +279,8 @@ class DataMirror:
             if not rel:
                 continue
             # Mirror under data/<host>/... so relative img src stays valid
-            host_root = self.cfg.mirror_path / "data" / host
-            dest = host_root / rel
-            if dest.exists() and dest.stat().st_size > 0:
+            key = normalize_key(f"data/{host}/{rel}")
+            if self.storage.exists(key) and (self.storage.size(key) or 0) > 0:
                 continue
             try:
                 res = await self.http.get(asset_url)
@@ -286,23 +290,26 @@ class DataMirror:
             if res.status_code >= 400:
                 log.warning("data asset HTTP %s for %s", res.status_code, asset_url)
                 continue
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(res.content)
+            self.storage.put_bytes(key, res.content, content_type=res.content_type)
             self.db.upsert_resource(
                 url=asset_url,
                 kind="static",
                 host=host,
-                local_path=str(dest),
+                local_path=key,
                 content_type=res.content_type,
                 status="done",
                 http_status=res.status_code,
                 sha256=sha256_bytes(res.content),
             )
-            log.info("Saved data page asset → %s", dest)
+            log.info("Saved data page asset → %s", key)
 
     async def _maybe_download_file(self, entry: ListingEntry) -> None:
         url = entry.href
-        ext = "." + url.rsplit(".", 1)[-1].lower() if "." in urlparse(url).path.split("/")[-1] else ""
+        ext = (
+            "." + url.rsplit(".", 1)[-1].lower()
+            if "." in urlparse(url).path.split("/")[-1]
+            else ""
+        )
         if ext and ext in {e.lower() for e in self.cfg.data.skip_extensions}:
             self.stats["files_skipped"] += 1
             return
@@ -338,10 +345,16 @@ class DataMirror:
                     content_length=entry.size,
                 )
                 self.stats["files_skipped"] += 1
-                log.info("Deferring large file to torrent: %s (%s bytes)", url, entry.size)
+                log.info(
+                    "Deferring large file to torrent: %s (%s bytes)", url, entry.size
+                )
                 return
 
-        if self.cfg.data.max_file_bytes and entry.size and entry.size > self.cfg.data.max_file_bytes:
+        if (
+            self.cfg.data.max_file_bytes
+            and entry.size
+            and entry.size > self.cfg.data.max_file_bytes
+        ):
             log.info(
                 "Skipping %s: size %s > max_file_bytes %s",
                 url,
@@ -351,7 +364,7 @@ class DataMirror:
             self.stats["files_skipped"] += 1
             return
 
-        local = data_file_local_path(self.cfg.mirror_path, url)
+        key = data_file_object_key(url)
         existing = self.db.get_resource(url)
 
         # Cheap HEAD/GET probe for validators when size unknown
@@ -367,29 +380,40 @@ class DataMirror:
         except Exception as exc:  # noqa: BLE001
             log.debug("Probe failed for %s: %s", url, exc)
 
-        if self.cfg.data.max_file_bytes and content_length and content_length > self.cfg.data.max_file_bytes:
+        if (
+            self.cfg.data.max_file_bytes
+            and content_length
+            and content_length > self.cfg.data.max_file_bytes
+        ):
             self.stats["files_skipped"] += 1
             return
 
+        object_exists = self.storage.exists(key)
         if not url_needs_download(
             existing,
             etag=etag,
             last_modified=last_modified,
             content_length=content_length,
-            local_path=local,
+            object_exists=object_exists,
+            object_size=self.storage.size(key) if object_exists else None,
         ):
             self.stats["files_skipped"] += 1
             return
 
         try:
-            meta = await self.http.download_to(
-                url, local, expected_size=content_length, resume=True
+            meta = await self.http.download_to_storage(
+                url,
+                self.storage,
+                key,
+                staging_dir=self.cfg.staging_path,
+                expected_size=content_length,
+                resume=True,
             )
             self.db.upsert_resource(
                 url=url,
                 kind="data_file",
                 host=host_of(url),
-                local_path=str(local),
+                local_path=key,
                 content_type=meta.get("content_type"),
                 etag=meta.get("etag") or etag,
                 last_modified=meta.get("last_modified") or last_modified,
@@ -399,7 +423,7 @@ class DataMirror:
                 error=None,
             )
             self.stats["files_downloaded"] += 1
-            log.info("Downloaded %s -> %s (%s bytes)", url, local, meta.get("bytes"))
+            log.info("Downloaded %s -> %s (%s bytes)", url, key, meta.get("bytes"))
         except Exception as exc:  # noqa: BLE001
             self.stats["errors"] += 1
             self.db.mark_resource(url, "error", kind="data_file", error=str(exc))

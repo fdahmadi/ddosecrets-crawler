@@ -1,9 +1,26 @@
 # DDoSecrets mirror configuration
 # Full public archive is typically tens of TB. Prefer torrents for bulk data.
+#
+# PostgreSQL and MinIO run on separate hosts — point the URLs below at them.
+# Secrets can also be supplied via env: DATABASE_URL, MINIO_ENDPOINT,
+# MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_BUCKET, STORAGE_BACKEND.
 
-mirror_root: ./mirror
-state_db: ./state/mirror.db
-catalog_db: ./state/catalog.db
+database:
+  url: "postgresql://ddosecrets:CHANGE_ME@postgres.example.com:5432/ddosecrets"
+
+storage:
+  backend: minio
+  endpoint: "minio.example.com:9000"
+  access_key: "CHANGE_ME"
+  secret_key: "CHANGE_ME"
+  bucket: "ddosecrets-mirror"
+  secure: true
+  region: null
+  prefix: ""
+  staging_dir: ./staging
+  # Only used when backend: local
+  mirror_root: ./mirror
+
 user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
 # Domains to mirror (apex + known subdomains)
@@ -45,13 +62,13 @@ data:
   skip_extensions: []
   recurse_directories: true
 
-# Torrent / magnet sync
+# Torrent / magnet sync (aria2 still needs a local staging directory)
 torrent:
   enabled: true
   magnets_csv: https://torrents.ddosecrets.org/magnets.csv
   releases_rss: https://torrents.ddosecrets.org/releases.xml
   site_rss: https://ddosecrets.org/feed/rss.xml
-  download_dir: ./mirror/torrents
+  download_dir: ./staging/torrents
   aria2_rpc: null           # e.g. http://127.0.0.1:6800/jsonrpc
   aria2_secret: null
   use_cli: true             # spawn aria2c processes when RPC is not set

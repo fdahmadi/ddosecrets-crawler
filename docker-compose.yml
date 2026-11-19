@@ -1,13 +1,18 @@
-# Default (VPS / full): UI + continuous scheduler with config.docker.yaml
+# Crawler + UI. PostgreSQL and MinIO are expected on separate servers —
+# pass connection details via environment (or edit config.docker*.yaml).
+#
 #   docker compose up -d --build
 #   open http://localhost:8090
 #
-# Laptop preview (slow, no bulk downloads):
+# Laptop preview:
 #   CONFIG_NAME=config.docker.laptop.yaml docker compose up -d --build
 #
-# One-shot manual commands:
-#   docker compose --profile manual run --rm crawler run site \
-#     -c /app/config.docker.laptop.yaml --no-torrent-download
+# Required env (example .env):
+#   DATABASE_URL=postgresql://user:pass@db-host:5432/ddosecrets
+#   MINIO_ENDPOINT=minio-host:9000
+#   MINIO_ACCESS_KEY=...
+#   MINIO_SECRET_KEY=...
+#   MINIO_BUCKET=ddosecrets-mirror
 #
 # Stop:
 #   docker compose down
@@ -21,13 +26,18 @@ services:
     ports:
       - "8090:8090"
     volumes:
-      - ./mirror:/data/mirror
-      - ./state:/data/state
+      - ./staging:/data/staging
       - ./logs:/data/logs
       - ./config.docker.yaml:/app/config.docker.yaml:ro
       - ./config.docker.laptop.yaml:/app/config.docker.laptop.yaml:ro
     environment:
       - TZ=Asia/Tehran
+      - DATABASE_URL=${DATABASE_URL:-}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-}
+      - MINIO_BUCKET=${MINIO_BUCKET:-ddosecrets-mirror}
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-minio}
     command:
       [
         "serve",
@@ -39,35 +49,43 @@ services:
         "8090",
       ]
 
-  # Continuous incremental crawler (torrent → data → site; drains pending queues)
   scheduler:
     build: .
     image: ddosecrets-crawler:latest
     container_name: ddosecrets-scheduler
     restart: unless-stopped
     volumes:
-      - ./mirror:/data/mirror
-      - ./state:/data/state
+      - ./staging:/data/staging
       - ./logs:/data/logs
       - ./config.docker.yaml:/app/config.docker.yaml:ro
       - ./config.docker.laptop.yaml:/app/config.docker.laptop.yaml:ro
     environment:
       - TZ=Asia/Tehran
+      - DATABASE_URL=${DATABASE_URL:-}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-}
+      - MINIO_BUCKET=${MINIO_BUCKET:-ddosecrets-mirror}
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-minio}
     command: ["schedule", "-c", "/app/${CONFIG_NAME:-config.docker.yaml}"]
     depends_on:
       - ui
 
-  # One-shot / interactive crawler commands (profile: manual)
   crawler:
     build: .
     image: ddosecrets-crawler:latest
     profiles: ["manual"]
     volumes:
-      - ./mirror:/data/mirror
-      - ./state:/data/state
+      - ./staging:/data/staging
       - ./logs:/data/logs
       - ./config.docker.yaml:/app/config.docker.yaml:ro
       - ./config.docker.laptop.yaml:/app/config.docker.laptop.yaml:ro
     environment:
       - TZ=Asia/Tehran
+      - DATABASE_URL=${DATABASE_URL:-}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-}
+      - MINIO_BUCKET=${MINIO_BUCKET:-ddosecrets-mirror}
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-minio}
     command: ["status", "-c", "/app/${CONFIG_NAME:-config.docker.yaml}"]

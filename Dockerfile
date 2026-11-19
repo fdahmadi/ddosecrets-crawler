@@ -23,14 +23,14 @@ RUN pip install --upgrade pip \
 COPY config.yaml config.laptop.yaml config.docker.yaml config.docker.laptop.yaml ./
 COPY scripts ./scripts
 
-RUN mkdir -p /data/mirror /data/state /data/logs \
+RUN mkdir -p /data/staging /data/logs \
     && useradd --create-home --uid 1000 crawler \
     && chown -R crawler:crawler /app /data
 
 USER crawler
 WORKDIR /app
 
-VOLUME ["/data/mirror", "/data/state", "/data/logs"]
+VOLUME ["/data/staging", "/data/logs"]
 
 ENTRYPOINT ["python", "-m", "ddosecrets_crawler"]
 CMD ["status", "-c", "/app/config.docker.yaml"]

@@ -179,13 +179,50 @@ docker compose logs -f ui scheduler
 docker compose --profile manual run --rm --entrypoint bash crawler
 ```
 
-> Tip: on VPS, put a large disk behind `./mirror` before enabling torrent downloads.
+> Tip: PostgreSQL and MinIO should already be reachable from the crawler host.
+> Put a large disk behind `storage.staging_dir` / `torrent.download_dir` before enabling aria2.
+
+---
+
+## 4b) PostgreSQL + MinIO (separate servers)
+
+Create the DB once on the Postgres host:
+
+```sql
+CREATE USER ddosecrets WITH PASSWORD 'CHANGE_ME';
+CREATE DATABASE ddosecrets OWNER ddosecrets;
+```
+
+Create the MinIO bucket (UI or `mc mb`) e.g. `ddosecrets-mirror`.
+
+Point the crawler at both services (config or env):
+
+```bash
+export DATABASE_URL='postgresql://ddosecrets:CHANGE_ME@postgres-host:5432/ddosecrets'
+export MINIO_ENDPOINT='minio-host:9000'
+export MINIO_ACCESS_KEY='...'
+export MINIO_SECRET_KEY='...'
+export MINIO_BUCKET='ddosecrets-mirror'
+# optional: STORAGE_BACKEND=minio
+```
+
+Or edit `database.url` / `storage.*` in `config.yaml` (prefer `*.local.yaml` for secrets).
+
+Schema tables are created automatically on first connect.
+
+For local-only file storage (no MinIO), set:
+
+```yaml
+storage:
+  backend: local
+  mirror_root: ./mirror
+```
 
 ---
 
 ## 5) VPS without Docker
 
-1. Copy the project; point `mirror_root` in `config.yaml` at a large disk.
+1. Copy the project; set `database.url` + MinIO `storage.*` in `config.yaml` / env.
 2. `bash scripts/install.sh` + `sudo apt install aria2`
 3. Enable continuous workers:
 
@@ -233,6 +270,9 @@ python -m ddosecrets_crawler schedule -c config.laptop.yaml --once
 
 Important keys:
 
+- `database.url` — PostgreSQL DSN (or `DATABASE_URL`)
+- `storage.backend` — `minio` or `local`
+- `storage.endpoint` / `access_key` / `secret_key` / `bucket` — MinIO
 - `schedule.continuous` — keep draining pending site queue
 - `schedule.site_interval_hours` — when to revalidate stale site pages
 - `polite.min_delay` / `max_delay` — request pacing

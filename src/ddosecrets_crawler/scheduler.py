@@ -89,7 +89,7 @@ async def run_scheduler(cfg: AppConfig, *, once: bool = False) -> None:
 
         # Site: always run when due, or keep draining while continuous + pending
         while cfg.site.enabled:
-            db = StateDB(cfg.state_path)
+            db = StateDB.from_config(cfg)
             try:
                 pending_articles, pending_other = _pending_followable(db)
             finally:
@@ -104,7 +104,7 @@ async def run_scheduler(cfg: AppConfig, *, once: bool = False) -> None:
             # On interval (not every continuous drain batch), re-check stale done pages
             if due or first_run:
                 batch = int(cfg.site.max_pages or 100)
-                db = StateDB(cfg.state_path)
+                db = StateDB.from_config(cfg)
                 try:
                     n = db.requeue_for_revalidation(
                         hosts=["ddosecrets.org", "www.ddosecrets.org"],
@@ -138,7 +138,7 @@ async def run_scheduler(cfg: AppConfig, *, once: bool = False) -> None:
             if not continuous:
                 break
 
-            db = StateDB(cfg.state_path)
+            db = StateDB.from_config(cfg)
             try:
                 pending_articles, pending_other = _pending_followable(db)
             finally:
@@ -174,7 +174,7 @@ async def run_scheduler(cfg: AppConfig, *, once: bool = False) -> None:
 
         if time.time() - last_full >= full_iv:
             log.info("Scheduler starting full reconcile (revalidate done pages)")
-            db = StateDB(cfg.state_path)
+            db = StateDB.from_config(cfg)
             try:
                 n = db.requeue_for_revalidation(
                     hosts=["ddosecrets.org", "www.ddosecrets.org"],
@@ -208,7 +208,7 @@ async def run_scheduler(cfg: AppConfig, *, once: bool = False) -> None:
         if continuous:
             sleep_for = min(sleep_for, idle_sleep)
             # If anything is still pending, wake sooner
-            db = StateDB(cfg.state_path)
+            db = StateDB.from_config(cfg)
             try:
                 pa, po = _pending_followable(db)
             finally:

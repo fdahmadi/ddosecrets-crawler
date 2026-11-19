@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import mimetypes
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -17,15 +18,16 @@ from ..config import (
     write_local_config,
 )
 from ..db import StateDB
+from ..storage import build_storage, normalize_key
 from .helpers import (
-    dir_size_bytes,
+    article_exists,
     duration_seconds,
     format_ts,
     human_size,
     list_mirrored_domains,
-    local_article_path,
     local_article_url,
     release_to_dict,
+    storage_size_bytes,
 )
 from .settings_form import (
     FORM_GROUPS,
@@ -48,56 +50,34 @@ def create_app(config_path: str | Path) -> FastAPI:
     templates.env.filters["ts"] = format_ts
     templates.env.filters["duration"] = duration_seconds
 
-    mirror_root = cfg.mirror_path
-    state_path = cfg.state_path
+    storage = build_storage(cfg)
     app.state.config_base = str(base_path)
     app.state.config_local = str(local_path)
     app.state.config_active = str(active_path)
     app.state.using_local = local_path.exists()
+    app.state.storage_desc = storage.describe()
 
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-    # /files is served by browse_files() so directories get an HTML listing
-    # (Starlette StaticFiles returns JSON 404 for folder roots without index.html).
-    mirror_root.mkdir(parents=True, exist_ok=True)
 
     def db() -> StateDB:
-        return StateDB(state_path)
+        return StateDB.from_config(cfg)
 
-    def _safe_mirror_path(rel: str) -> Path:
-        root = mirror_root.resolve()
-        target = (root / rel).resolve() if rel else root
-        if target != root and not str(target).startswith(str(root) + "/"):
-            raise HTTPException(status_code=403, detail="Path outside mirror")
-        return target
-
-    def _list_dir_entries(directory: Path, rel: str) -> list[dict]:
+    def _list_dir_entries(rel: str) -> list[dict]:
         entries: list[dict] = []
-        try:
-            children = sorted(
-                directory.iterdir(),
-                key=lambda p: (not p.is_dir(), p.name.lower()),
-            )
-        except OSError:
-            return entries
-        for child in children:
-            if child.name.startswith("."):
-                continue
-            child_rel = f"{rel}/{child.name}".strip("/") if rel else child.name
-            href = f"/files/{child_rel}/" if child.is_dir() else f"/files/{child_rel}"
-            size = None
-            if child.is_file():
-                try:
-                    size = child.stat().st_size
-                except OSError:
-                    size = None
+        for child in storage.list_dir(rel):
+            href = f"/files/{child.key}" if child.is_dir else f"/files/{child.key}"
+            if child.is_dir and not href.endswith("/"):
+                href += "/"
             entries.append(
                 {
-                    "name": child.name + ("/" if child.is_dir() else ""),
+                    "name": child.name,
                     "href": href,
-                    "is_dir": child.is_dir(),
-                    "size": size,
-                    "size_human": human_size(size) if size is not None else "—",
+                    "is_dir": child.is_dir,
+                    "size": child.size,
+                    "size_human": (
+                        human_size(child.size) if child.size is not None else "—"
+                    ),
                 }
             )
         return entries
@@ -133,11 +113,12 @@ def create_app(config_path: str | Path) -> FastAPI:
             stats = database.crawl_stats()
         finally:
             database.close()
-        stats["disk_bytes"] = dir_size_bytes(mirror_root)
+        stats["disk_bytes"] = storage_size_bytes(storage)
         stats["disk_human"] = human_size(stats["disk_bytes"])
         stats["bytes_done_human"] = human_size(stats.get("bytes_done"))
         stats["file_bytes_done_human"] = human_size(stats.get("file_bytes_done"))
         stats["page_bytes_done_human"] = human_size(stats.get("page_bytes_done"))
+        stats["storage"] = storage.describe()
         return stats
 
     @app.get("/", response_class=HTMLResponse)
@@ -145,21 +126,19 @@ def create_app(config_path: str | Path) -> FastAPI:
         database = db()
         try:
             stats = database.crawl_stats()
-            recent = database.conn.execute(
-                """
+            recent = database.conn.execute("""
                 SELECT * FROM releases
                 ORDER BY
                   CASE WHEN published_at IS NULL OR published_at='' THEN 1 ELSE 0 END,
                   published_at DESC, title
                 LIMIT 12
-                """
-            ).fetchall()
+                """).fetchall()
             recent_items = [release_to_dict(r) for r in recent]
             for item in recent_items:
-                item["has_local_html"] = local_article_path(mirror_root, item["slug"]) is not None
+                item["has_local_html"] = article_exists(storage, item["slug"])
         finally:
             database.close()
-        stats["disk_bytes"] = dir_size_bytes(mirror_root)
+        stats["disk_bytes"] = storage_size_bytes(storage)
         stats["disk_human"] = human_size(stats["disk_bytes"])
         stats["bytes_done_human"] = human_size(stats.get("bytes_done"))
         stats["file_bytes_done_human"] = human_size(stats.get("file_bytes_done"))
@@ -170,7 +149,7 @@ def create_app(config_path: str | Path) -> FastAPI:
             {
                 "stats": stats,
                 "recent": recent_items,
-                "mirror_root": str(mirror_root),
+                "mirror_root": storage.describe(),
             },
         )
 
@@ -180,7 +159,7 @@ def create_app(config_path: str | Path) -> FastAPI:
         return templates.TemplateResponse(
             request,
             "stats.html",
-            {"stats": stats, "mirror_root": str(mirror_root)},
+            {"stats": stats, "mirror_root": storage.describe()},
         )
 
     @app.get("/domains", response_class=HTMLResponse)
@@ -188,7 +167,7 @@ def create_app(config_path: str | Path) -> FastAPI:
         database = db()
         try:
             domains = list_mirrored_domains(
-                mirror_root,
+                storage,
                 database,
                 seeds=list(cfg.seeds or []),
             )
@@ -197,7 +176,11 @@ def create_app(config_path: str | Path) -> FastAPI:
         return templates.TemplateResponse(
             request,
             "domains.html",
-            {"domains": domains, "mirror_root": str(mirror_root), "count": len(domains)},
+            {
+                "domains": domains,
+                "mirror_root": storage.describe(),
+                "count": len(domains),
+            },
         )
 
     @app.get("/releases", response_class=HTMLResponse)
@@ -214,15 +197,15 @@ def create_app(config_path: str | Path) -> FastAPI:
             if q.strip():
                 like = f"%{q.strip()}%"
                 sql += (
-                    " AND (title LIKE ? OR description LIKE ? OR slug LIKE ? "
-                    "OR countries LIKE ? OR types LIKE ? OR source LIKE ?)"
+                    " AND (title ILIKE %s OR description ILIKE %s OR slug ILIKE %s "
+                    "OR countries ILIKE %s OR types ILIKE %s OR source ILIKE %s)"
                 )
                 args.extend([like, like, like, like, like, like])
             if country.strip():
-                sql += " AND countries LIKE ?"
+                sql += " AND countries ILIKE %s"
                 args.append(f"%{country.strip()}%")
             if type_.strip():
-                sql += " AND types LIKE ?"
+                sql += " AND types ILIKE %s"
                 args.append(f"%{type_.strip()}%")
             sql += """
                 ORDER BY
@@ -230,12 +213,12 @@ def create_app(config_path: str | Path) -> FastAPI:
                   published_at DESC, title
                 LIMIT 500
             """
-            rows = database.conn.execute(sql, args).fetchall()
+            # conn.execute already translates ? → %s; avoid double-replace by using %s
+            # and calling through raw connection for ILIKE queries with %s already.
+            rows = database._raw.execute(sql, args).fetchall()
             items = [release_to_dict(r) for r in rows]
             for item in items:
-                item["has_local_html"] = (
-                    local_article_path(mirror_root, item["slug"]) is not None
-                )
+                item["has_local_html"] = article_exists(storage, item["slug"])
             countries = _unique_json_values(database, "countries")
             types = _unique_json_values(database, "types")
         finally:
@@ -264,11 +247,10 @@ def create_app(config_path: str | Path) -> FastAPI:
             if row is None:
                 raise HTTPException(status_code=404, detail="Release not found")
             item = release_to_dict(row)
-            local_html = local_article_path(mirror_root, slug)
-            item["has_local_html"] = local_html is not None
-            item["local_html_url"] = local_article_url(slug) if local_html else None
+            has_html = article_exists(storage, slug)
+            item["has_local_html"] = has_html
+            item["local_html_url"] = local_article_url(slug) if has_html else None
 
-            # Related magnet download statuses
             magnet_rows = []
             for magnet in item["magnets"]:
                 from ..urls import magnet_infohash
@@ -304,7 +286,7 @@ def create_app(config_path: str | Path) -> FastAPI:
                 args.append(status.strip())
             if q.strip():
                 like = f"%{q.strip()}%"
-                sql += " AND (title LIKE ? OR infohash LIKE ?)"
+                sql += " AND (title ILIKE ? OR infohash ILIKE ?)"
                 args.extend([like, like])
             sql += " ORDER BY updated_at DESC LIMIT 500"
             rows = [dict(r) for r in database.conn.execute(sql, args).fetchall()]
@@ -338,10 +320,10 @@ def create_app(config_path: str | Path) -> FastAPI:
         try:
             if q.strip():
                 like = f"%{q.strip()}%"
-                rows = database.conn.execute(
+                rows = database._raw.execute(
                     """
                     SELECT * FROM releases
-                    WHERE title LIKE ? OR description LIKE ? OR slug LIKE ?
+                    WHERE title ILIKE %s OR description ILIKE %s OR slug ILIKE %s
                     ORDER BY published_at DESC LIMIT 200
                     """,
                     (like, like, like),
@@ -388,7 +370,6 @@ def create_app(config_path: str | Path) -> FastAPI:
                 config_text = str(form.get("config_text") or "")
                 written = write_local_config(base, config_text)
             else:
-                # save_form
                 flat = {str(k): str(v) for k, v in form.items()}
                 data = config_dict_from_form(flat)
                 config_text = dump_config_yaml(data)
@@ -425,12 +406,23 @@ def create_app(config_path: str | Path) -> FastAPI:
     @app.get("/files/")
     @app.get("/files/{file_path:path}")
     async def browse_files(request: Request, file_path: str = ""):
-        """Serve files; directories always get a listing (click index.html to open a site)."""
-        rel = (file_path or "").strip("/")
-        target = _safe_mirror_path(rel)
-        if target.is_file():
-            return FileResponse(target)
-        if target.is_dir():
+        """Serve objects from mirror storage; directories get an HTML listing."""
+        rel = normalize_key(file_path) if file_path else ""
+        # Prefer exact file if present
+        if rel and storage.exists(rel):
+            ctype = mimetypes.guess_type(rel)[0] or "application/octet-stream"
+            size = storage.size(rel)
+            stream = storage.open_stream(rel)
+            headers = {}
+            if size is not None:
+                headers["content-length"] = str(size)
+            return StreamingResponse(stream, media_type=ctype, headers=headers)
+
+        # Directory listing (prefix)
+        entries = _list_dir_entries(rel)
+        index_key = f"{rel}/index.html".lstrip("/") if rel else "index.html"
+        # If prefix has children OR an index, treat as directory
+        if entries or storage.exists(index_key):
             parent_rel = "/".join(rel.split("/")[:-1]) if rel else ""
             parent_href = f"/files/{parent_rel}/" if parent_rel else "/files/"
             crumbs = []
@@ -440,18 +432,18 @@ def create_app(config_path: str | Path) -> FastAPI:
                 acc.append(part)
                 crumbs.append({"name": part, "href": "/files/" + "/".join(acc) + "/"})
             index_href = None
-            if (target / "index.html").is_file():
-                index_href = f"/files/{rel}/index.html" if rel else "/files/index.html"
+            if storage.exists(index_key):
+                index_href = f"/files/{index_key}"
             return templates.TemplateResponse(
                 request,
                 "files_browse.html",
                 {
                     "rel": rel,
-                    "mirror_root": str(mirror_root),
+                    "mirror_root": storage.describe(),
                     "parent_href": parent_href if rel else None,
                     "crumbs": crumbs,
                     "index_href": index_href,
-                    "entries": _list_dir_entries(target, rel),
+                    "entries": entries,
                 },
             )
         raise HTTPException(status_code=404, detail="File not found")
@@ -459,11 +451,20 @@ def create_app(config_path: str | Path) -> FastAPI:
     @app.get("/healthz")
     async def healthz():
         _base, local, active = resolve_config_path(base_path)
-        ok_db = state_path.exists()
+        ok_db = False
+        try:
+            database = db()
+            try:
+                database.conn.execute("SELECT 1")
+                ok_db = True
+            finally:
+                database.close()
+        except Exception:  # noqa: BLE001
+            ok_db = False
         return {
-            "ok": True,
-            "state_db": ok_db,
-            "mirror_root": str(mirror_root),
+            "ok": ok_db,
+            "database": ok_db,
+            "storage": storage.describe(),
             "config_active": str(active),
             "using_local": local.exists(),
         }
@@ -475,7 +476,7 @@ def _unique_json_values(database: StateDB, column: str) -> list[str]:
     values: set[str] = set()
     rows = database.conn.execute(f"SELECT {column} FROM releases").fetchall()
     for row in rows:
-        raw = row[0]
+        raw = row[column]
         if not raw:
             continue
         try:
@@ -489,7 +490,9 @@ def _unique_json_values(database: StateDB, column: str) -> list[str]:
     return sorted(values)
 
 
-def run_server(config_path: str | Path, host: str = "0.0.0.0", port: int = 8090) -> None:
+def run_server(
+    config_path: str | Path, host: str = "0.0.0.0", port: int = 8090
+) -> None:
     import uvicorn
 
     base, local, active = resolve_config_path(config_path)

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-from pathlib import Path
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -149,7 +148,9 @@ def store_article_metadata(db: StateDB, meta: dict) -> None:
             )
 
 
-def export_catalog_json(db: StateDB, path: Path) -> int:
+def export_catalog_json(
+    db: StateDB, storage, key: str = "metadata/catalog.json"
+) -> int:
     rows = db.conn.execute(
         "SELECT * FROM releases ORDER BY "
         "CASE WHEN published_at IS NULL OR published_at='' THEN 1 ELSE 0 END, "
@@ -173,8 +174,11 @@ def export_catalog_json(db: StateDB, path: Path) -> int:
                 "torrents": json.loads(r["torrents_json"] or "[]"),
             }
         )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    storage.put_text(
+        key,
+        json.dumps(items, ensure_ascii=False, indent=2),
+        content_type="application/json; charset=utf-8",
+    )
     return len(items)
 
 

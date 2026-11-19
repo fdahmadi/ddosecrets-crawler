@@ -13,6 +13,7 @@ from .http_client import PoliteHttpClient
 from .metadata import export_catalog_json
 from .polite import PoliteLimiter
 from .site_crawler import SiteCrawler
+from .storage import build_storage
 from .torrent_sync import TorrentSync
 
 log = logging.getLogger(__name__)
@@ -32,11 +33,16 @@ async def run_pipeline(cfg: AppConfig, *, mode: str = "all") -> dict[str, Any]:
       status         - print DB stats
     """
     ensure_runtime_dirs(cfg)
-    db = StateDB(cfg.state_path)
+    db = StateDB.from_config(cfg)
+    storage = build_storage(cfg)
     run_id = db.start_run(mode)
     limiter = PoliteLimiter(cfg.polite)
     http = PoliteHttpClient(cfg, limiter)
-    summary: dict[str, Any] = {"mode": mode}
+    summary: dict[str, Any] = {
+        "mode": mode,
+        "storage": storage.describe(),
+        "database": "postgresql",
+    }
 
     try:
         if mode == "status":
@@ -46,25 +52,23 @@ async def run_pipeline(cfg: AppConfig, *, mode: str = "all") -> dict[str, Any]:
 
         if mode in ("all", "full", "torrent-index", "torrent-start"):
             if cfg.torrent.enabled:
-                ts = TorrentSync(cfg, db, http)
+                ts = TorrentSync(cfg, db, http, storage)
                 if mode != "torrent-start":
                     summary["torrent_index"] = await ts.sync_indexes()
                 if mode in ("all", "full", "torrent-start"):
                     summary["torrent_start"] = await ts.start_downloads()
-                ts.export_magnet_queue(cfg.mirror_path / "metadata" / "magnet_queue.json")
+                ts.export_magnet_queue()
 
         if mode in ("all", "full", "site") and cfg.site.enabled:
-            crawler = SiteCrawler(cfg, db, http)
+            crawler = SiteCrawler(cfg, db, http, storage)
             summary["site"] = await crawler.crawl()
 
         if mode in ("all", "full", "data") and cfg.data.enabled:
-            mirror = DataMirror(cfg, db, http)
+            mirror = DataMirror(cfg, db, http, storage)
             summary["data"] = await mirror.mirror()
 
         if mode in ("all", "full", "catalog", "site"):
-            n = export_catalog_json(
-                db, cfg.mirror_path / "metadata" / "catalog.json"
-            )
+            n = export_catalog_json(db, storage)
             summary["catalog_count"] = n
 
         summary["db"] = db.stats()

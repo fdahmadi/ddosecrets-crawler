@@ -6,7 +6,12 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from .config import AppConfig
 from .polite import PoliteLimiter
@@ -76,7 +81,9 @@ class PoliteHttpClient:
             wait=wait_exponential(
                 multiplier=self.cfg.polite.retry_backoff_base, min=2, max=120
             ),
-            retry=retry_if_exception_type((httpx.TransportError, httpx.TimeoutException)),
+            retry=retry_if_exception_type(
+                (httpx.TransportError, httpx.TimeoutException)
+            ),
         )
         async def _do() -> httpx.Response:
             resp = await self._client.request(method, url, headers=headers)
@@ -94,7 +101,9 @@ class PoliteHttpClient:
 
         return await _do()
 
-    async def get(self, url: str, *, headers: dict[str, str] | None = None) -> FetchResult:
+    async def get(
+        self, url: str, *, headers: dict[str, str] | None = None
+    ) -> FetchResult:
         resp = await self.request("GET", url, headers=headers)
         content = await resp.aread()
         result = FetchResult(
@@ -121,9 +130,7 @@ class PoliteHttpClient:
             return result
         except Exception as exc:  # noqa: BLE001
             log.debug("HEAD failed for %s: %s; falling back to GET range", url, exc)
-            resp = await self.request(
-                "GET", url, headers={"Range": "bytes=0-0"}
-            )
+            resp = await self.request("GET", url, headers={"Range": "bytes=0-0"})
             result = FetchResult(
                 url=url,
                 status_code=resp.status_code,
@@ -159,7 +166,10 @@ class PoliteHttpClient:
                 # Already complete according to server
                 if part.exists():
                     part.replace(dest)
-                return {"status_code": 416, "bytes": dest.stat().st_size if dest.exists() else 0}
+                return {
+                    "status_code": 416,
+                    "bytes": dest.stat().st_size if dest.exists() else 0,
+                }
             if resp.status_code == 200 and existing > 0:
                 # Server ignored Range; restart
                 mode = "wb"
@@ -174,8 +184,10 @@ class PoliteHttpClient:
             last_modified = resp.headers.get("last-modified")
             content_type = resp.headers.get("content-type")
             cl = resp.headers.get("content-length")
-            content_length = int(cl) + existing if cl and cl.isdigit() and existing else (
-                int(cl) if cl and cl.isdigit() else written
+            content_length = (
+                int(cl) + existing
+                if cl and cl.isdigit() and existing
+                else (int(cl) if cl and cl.isdigit() else written)
             )
 
         if expected_size and written < expected_size:
@@ -190,3 +202,34 @@ class PoliteHttpClient:
             "content_type": content_type,
             "content_length": content_length,
         }
+
+    async def download_to_storage(
+        self,
+        url: str,
+        storage,
+        key: str,
+        *,
+        staging_dir: Path,
+        expected_size: int | None = None,
+        resume: bool = True,
+        content_type: str | None = None,
+    ) -> dict[str, Any]:
+        """Download to local staging, then upload to mirror storage (MinIO/local)."""
+        from .storage import staging_temp_path
+
+        staging_dir = Path(staging_dir)
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        dest = staging_temp_path(staging_dir, key)
+        meta = await self.download_to(
+            url, dest, expected_size=expected_size, resume=resume
+        )
+        storage.put_file(
+            key, dest, content_type=content_type or meta.get("content_type")
+        )
+        try:
+            dest.unlink(missing_ok=True)
+            part = dest.with_suffix(dest.suffix + ".part")
+            part.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return meta

@@ -1,8 +1,22 @@
-# Laptop preview config: slow + metadata/HTML only (no bulk file/torrent downloads)
+# Laptop preview: slow + metadata/HTML only (no bulk file/torrent downloads)
+# Still uses remote PostgreSQL + MinIO when configured; override via *.local.yaml
+# or env vars (DATABASE_URL, MINIO_*).
 
-mirror_root: ./mirror
-state_db: ./state/mirror.db
-catalog_db: ./state/catalog.db
+database:
+  url: "postgresql://ddosecrets:CHANGE_ME@127.0.0.1:5432/ddosecrets"
+
+storage:
+  backend: minio
+  endpoint: "127.0.0.1:9000"
+  access_key: "minioadmin"
+  secret_key: "minioadmin"
+  bucket: "ddosecrets-mirror"
+  secure: false
+  region: null
+  prefix: ""
+  staging_dir: ./staging
+  mirror_root: ./mirror
+
 user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
 seeds:
@@ -46,7 +60,7 @@ torrent:
   magnets_csv: https://torrents.ddosecrets.org/magnets.csv
   releases_rss: https://torrents.ddosecrets.org/releases.xml
   site_rss: https://ddosecrets.org/feed/rss.xml
-  download_dir: ./mirror/torrents
+  download_dir: ./staging/torrents
   aria2_rpc: null
   aria2_secret: null
   use_cli: false            # do not start aria2 downloads

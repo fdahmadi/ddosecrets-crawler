@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import time
-from pathlib import Path
 from typing import Any
 
 
@@ -63,30 +62,29 @@ def duration_seconds(started: float | None, finished: float | None) -> str:
 _DISK_CACHE: dict[str, tuple[float, int]] = {}
 
 
-def dir_size_bytes(path: Path, *, cache_seconds: float = 30.0) -> int:
-    """Directory size with short TTL cache to keep UI snappy."""
-    key = str(path.resolve()) if path.exists() else str(path)
+def storage_size_bytes(
+    storage, prefix: str = "", *, cache_seconds: float = 30.0
+) -> int:
+    """Storage size with short TTL cache to keep UI snappy."""
+    key = f"{storage.describe()}::{prefix}"
     now = time.time()
     cached = _DISK_CACHE.get(key)
     if cached and (now - cached[0]) < cache_seconds:
         return cached[1]
-    if not path.exists():
-        _DISK_CACHE[key] = (now, 0)
-        return 0
-    total = 0
-    for p in path.rglob("*"):
-        try:
-            if p.is_file():
-                total += p.stat().st_size
-        except OSError:
-            continue
+    try:
+        total = int(storage.total_bytes(prefix))
+    except Exception:  # noqa: BLE001
+        total = 0
     _DISK_CACHE[key] = (now, total)
     return total
 
 
-def local_article_path(mirror_root: Path, slug: str) -> Path | None:
-    path = mirror_root / "site" / "ddosecrets.org" / "article" / f"{slug}.html"
-    return path if path.exists() else None
+def local_article_key(slug: str) -> str:
+    return f"site/ddosecrets.org/article/{slug}.html"
+
+
+def article_exists(storage, slug: str) -> bool:
+    return storage.exists(local_article_key(slug))
 
 
 def local_article_url(slug: str) -> str:
@@ -97,18 +95,23 @@ def _guess_section(host: str) -> str:
     h = (host or "").lower()
     if h.startswith("data."):
         return "data"
-    # HTML landing pages for torrents.* live under mirror/site/<host>/
+    # HTML landing pages for torrents.* live under site/<host>/
     return "site"
 
 
-def ensure_torrents_domain_mirror(mirror_root: Path, host: str = "torrents.ddosecrets.org") -> Path | None:
+def ensure_torrents_domain_mirror(
+    storage, host: str = "torrents.ddosecrets.org"
+) -> bool:
     """
     Ensure torrents host has a browsable folder.
 
     Never overwrite a crawled homepage (index.html). Only write a fallback
     indexes.html listing saved CSV/RSS metadata when the real page is absent.
     """
-    meta = mirror_root / "metadata"
+    index_key = f"site/{host}/index.html"
+    if storage.exists(index_key):
+        return True
+
     index_files = [
         name
         for name in (
@@ -117,21 +120,19 @@ def ensure_torrents_domain_mirror(mirror_root: Path, host: str = "torrents.ddose
             "magnet_queue.json",
             "site_rss.xml",
         )
-        if (meta / name).is_file()
+        if storage.exists(f"metadata/{name}")
     ]
-    dest_dir = mirror_root / "site" / host
-    index = dest_dir / "index.html"
-    if index.is_file():
-        return dest_dir
     if not index_files:
-        return dest_dir if dest_dir.is_dir() else None
+        # Still listable if any object under the host prefix exists
+        return bool(storage.list_dir(f"site/{host}"))
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
     links = "\n".join(
-        f'      <li><a href="/files/metadata/{name}">{name}</a></li>' for name in index_files
+        f'      <li><a href="/files/metadata/{name}">{name}</a></li>'
+        for name in index_files
     )
     # Fallback only — real site HTML comes from torrent-index crawl
-    index.write_text(
+    storage.put_text(
+        index_key,
         f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -153,35 +154,35 @@ def ensure_torrents_domain_mirror(mirror_root: Path, host: str = "torrents.ddose
 </body>
 </html>
 """,
-        encoding="utf-8",
+        content_type="text/html; charset=utf-8",
     )
-    return dest_dir
+    return True
 
 
-def _domain_entry(mirror_root: Path, section: str, host: str) -> tuple[bool, str | None, Path | None]:
-    """Return (has_files, open_url, local_dir)."""
-    local_dir = mirror_root / section / host
-    if not local_dir.is_dir():
+def _domain_entry(
+    storage, section: str, host: str
+) -> tuple[bool, str | None, str | None]:
+    """Return (has_files, open_url, prefix_key)."""
+    prefix = f"{section}/{host}"
+    entries = storage.list_dir(prefix)
+    if not entries and not storage.exists(f"{prefix}/index.html"):
         return False, None, None
-    index = local_dir / "index.html"
-    if index.is_file():
-        return True, f"/files/{section}/{host}/index.html", local_dir
-    return True, f"/files/{section}/{host}/", local_dir
+    if storage.exists(f"{prefix}/index.html"):
+        return True, f"/files/{prefix}/index.html", prefix
+    return True, f"/files/{prefix}/", prefix
 
 
 def list_mirrored_domains(
-    mirror_root: Path,
+    storage,
     database,
     *,
     seeds: list[str] | None = None,  # unused; kept for call-site compatibility
 ) -> list[dict[str, Any]]:
-    """Build clickable domain list from DB hosts and on-disk mirror folders only."""
-    # Ensure torrents.* is browsable even though indexes live under metadata/
-    ensure_torrents_domain_mirror(mirror_root)
+    """Build clickable domain list from DB hosts and storage prefixes only."""
+    ensure_torrents_domain_mirror(storage)
 
     stats_by_host: dict[str, dict[str, int]] = {}
-    for row in database.conn.execute(
-        """
+    for row in database.conn.execute("""
         SELECT
           host,
           COUNT(*) AS total,
@@ -191,8 +192,7 @@ def list_mirrored_domains(
         FROM resources
         WHERE host IS NOT NULL AND TRIM(host) != ''
         GROUP BY host
-        """
-    ):
+        """):
         stats_by_host[row["host"]] = {
             "total": int(row["total"] or 0),
             "done": int(row["done"] or 0),
@@ -200,33 +200,28 @@ def list_mirrored_domains(
             "errors": int(row["errors"] or 0),
         }
 
-    magnets_total = database.conn.execute("SELECT COUNT(*) AS c FROM magnets").fetchone()["c"]
+    magnets_total = database.conn.execute(
+        "SELECT COUNT(*) AS c FROM magnets"
+    ).fetchone()["c"]
 
-    # Only real mirrored/tracked hosts — not empty config seeds
     hosts: set[str] = set(stats_by_host)
     for section in ("site", "data"):
-        section_dir = mirror_root / section
-        if not section_dir.is_dir():
-            continue
-        for host_dir in section_dir.iterdir():
-            if host_dir.is_dir():
-                hosts.add(host_dir.name)
+        for host in storage.list_hosts(section):
+            hosts.add(host)
 
     discovered: dict[str, dict[str, Any]] = {}
     for host in sorted(hosts):
         section = _guess_section(host)
         if host.startswith("torrents."):
-            ensure_torrents_domain_mirror(mirror_root, host=host)
+            ensure_torrents_domain_mirror(storage, host=host)
             section = "site"
-        has_files, open_url, local_dir = _domain_entry(mirror_root, section, host)
+        has_files, open_url, prefix = _domain_entry(storage, section, host)
         st = stats_by_host.get(host, {})
-        # Prefer data section path when host only exists under data/
         if not has_files and section == "site":
-            has_data, data_url, data_dir = _domain_entry(mirror_root, "data", host)
+            has_data, data_url, data_prefix = _domain_entry(storage, "data", host)
             if has_data:
                 section = "data"
-                has_files, open_url, local_dir = True, data_url, data_dir
-        # Skip ghost hosts with nothing on disk and nothing in the DB
+                has_files, open_url, prefix = True, data_url, data_prefix
         if not has_files and not st:
             continue
         item = {
@@ -236,13 +231,15 @@ def list_mirrored_domains(
             "has_mirror": has_files,
             "open_url": open_url,
             "browse_url": f"/files/{section}/{host}/" if has_files else None,
-            "local_path": str(local_dir) if local_dir else None,
-            "disk_bytes": dir_size_bytes(local_dir) if local_dir else 0,
+            "local_path": prefix,
+            "disk_bytes": storage_size_bytes(storage, prefix) if prefix else 0,
             "total": st.get("total", 0),
             "done": st.get("done", 0),
             "pending": st.get("pending", 0),
             "errors": st.get("errors", 0),
-            "magnets_total": int(magnets_total or 0) if host.startswith("torrents.") else None,
+            "magnets_total": (
+                int(magnets_total or 0) if host.startswith("torrents.") else None
+            ),
         }
         discovered[host] = item
 

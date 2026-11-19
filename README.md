@@ -19,11 +19,12 @@ Designed for Threat Intelligence archival: structured metadata catalog + local m
 - Continuous scheduler (`schedule`) — drains pending queues without manual restarts
 - Conditional revalidation (`ETag` / `If-Modified-Since` / sha256)
 - Random polite delays + burst pauses; single concurrent HTTP by default
-- SQLite state for incremental sync
+- PostgreSQL state DB (remote host) for incremental sync
+- MinIO / S3 object storage (separate host) for mirrored files
 - Offline HTML link rewrite to `/files/...`
 - Local UI: Overview, Stats (with Stat help toggle), Domains, Releases, Magnets, Files browser, Settings
 - Docker Compose: UI + scheduler by default; laptop or full config via `CONFIG_NAME`
-- aria2c integration for torrent downloads (VPS / full config)
+- aria2c integration for torrent downloads (VPS / full config; local staging dir)
 
 ## Quick start (laptop)
 
@@ -67,21 +68,26 @@ python -m ddosecrets_crawler status -c config.laptop.yaml
 python -m ddosecrets_crawler schedule -c config.laptop.yaml   # continuous
 ```
 
-## Output layout
+## Backends & object layout
+
+| Role | Backend | Config |
+| --- | --- | --- |
+| Crawl state | PostgreSQL | `database.url` or `DATABASE_URL` |
+| Mirror files | MinIO | `storage.*` or `MINIO_*` |
+
+Object keys (same paths under `/files/...` in the UI):
 
 ```
-mirror/
-  site/ddosecrets.org/...
-  site/torrents.ddosecrets.org/...
-  data/data.ddosecrets.org/...
-  torrents/<infohash>/...          # if torrent downloads enabled
-  metadata/catalog.json
-  metadata/magnets.csv
-  metadata/magnet_queue.json
-  metadata/articles/<slug>.json
-state/mirror.db
-logs/
+site/ddosecrets.org/...
+site/torrents.ddosecrets.org/...
+data/data.ddosecrets.org/...
+metadata/catalog.json
+metadata/magnets.csv
+metadata/magnet_queue.json
+metadata/articles/<slug>.json
 ```
+
+Torrent downloads stage on local disk (`torrent.download_dir`); logs stay under `logs/`.
 
 ## Incremental updates
 

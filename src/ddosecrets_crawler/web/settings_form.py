@@ -6,12 +6,54 @@ import yaml
 
 FORM_GROUPS: list[dict[str, Any]] = [
     {
+        "id": "database",
+        "title": "PostgreSQL",
+        "section": "database",
+        "fields": [
+            {
+                "key": "url",
+                "label": "Database URL (postgresql://user:pass@host:5432/db)",
+                "type": "text",
+            },
+        ],
+    },
+    {
+        "id": "storage",
+        "title": "Object storage (MinIO / local)",
+        "section": "storage",
+        "fields": [
+            {
+                "key": "backend",
+                "label": "Backend (minio | local)",
+                "type": "text",
+            },
+            {"key": "endpoint", "label": "MinIO endpoint (host:9000)", "type": "text"},
+            {"key": "access_key", "label": "MinIO access key", "type": "text"},
+            {"key": "secret_key", "label": "MinIO secret key", "type": "text"},
+            {"key": "bucket", "label": "MinIO bucket", "type": "text"},
+            {"key": "secure", "label": "MinIO TLS (secure)", "type": "bool"},
+            {
+                "key": "region",
+                "label": "MinIO region (optional)",
+                "type": "text_nullable",
+            },
+            {"key": "prefix", "label": "Object key prefix (optional)", "type": "text"},
+            {
+                "key": "mirror_root",
+                "label": "Local mirror root (backend=local only)",
+                "type": "text",
+            },
+            {
+                "key": "staging_dir",
+                "label": "Local staging dir (temp downloads)",
+                "type": "text",
+            },
+        ],
+    },
+    {
         "id": "general",
         "title": "General",
         "fields": [
-            {"key": "mirror_root", "label": "Mirror root", "type": "text"},
-            {"key": "state_db", "label": "State DB path", "type": "text"},
-            {"key": "catalog_db", "label": "Catalog DB path", "type": "text"},
             {"key": "user_agent", "label": "User-Agent", "type": "text"},
             {
                 "key": "seeds",
@@ -32,12 +74,32 @@ FORM_GROUPS: list[dict[str, Any]] = [
         "fields": [
             {"key": "min_delay", "label": "Min delay (sec)", "type": "float"},
             {"key": "max_delay", "label": "Max delay (sec)", "type": "float"},
-            {"key": "burst_pause_every", "label": "Burst pause every N requests", "type": "int"},
-            {"key": "burst_pause_min", "label": "Burst pause min (sec)", "type": "float"},
-            {"key": "burst_pause_max", "label": "Burst pause max (sec)", "type": "float"},
-            {"key": "max_concurrent_http", "label": "Max concurrent HTTP", "type": "int"},
+            {
+                "key": "burst_pause_every",
+                "label": "Burst pause every N requests",
+                "type": "int",
+            },
+            {
+                "key": "burst_pause_min",
+                "label": "Burst pause min (sec)",
+                "type": "float",
+            },
+            {
+                "key": "burst_pause_max",
+                "label": "Burst pause max (sec)",
+                "type": "float",
+            },
+            {
+                "key": "max_concurrent_http",
+                "label": "Max concurrent HTTP",
+                "type": "int",
+            },
             {"key": "retry_max", "label": "Retry max", "type": "int"},
-            {"key": "retry_backoff_base", "label": "Retry backoff base", "type": "float"},
+            {
+                "key": "retry_backoff_base",
+                "label": "Retry backoff base",
+                "type": "float",
+            },
             {"key": "timeout", "label": "Timeout (sec)", "type": "float"},
         ],
     },
@@ -50,7 +112,11 @@ FORM_GROUPS: list[dict[str, Any]] = [
             {"key": "save_html", "label": "Save HTML", "type": "bool"},
             {"key": "follow_static", "label": "Follow static assets", "type": "bool"},
             {"key": "max_pages", "label": "Max pages (0=unlimited)", "type": "int"},
-            {"key": "respect_query_params", "label": "Respect query params", "type": "bool"},
+            {
+                "key": "respect_query_params",
+                "label": "Respect query params",
+                "type": "bool",
+            },
         ],
     },
     {
@@ -61,14 +127,22 @@ FORM_GROUPS: list[dict[str, Any]] = [
             {"key": "enabled", "label": "Enabled", "type": "bool"},
             {"key": "prefer_torrent", "label": "Prefer torrent", "type": "bool"},
             {"key": "http_fallback", "label": "HTTP fallback", "type": "bool"},
-            {"key": "max_file_bytes", "label": "Max file bytes (0=unlimited)", "type": "int"},
+            {
+                "key": "max_file_bytes",
+                "label": "Max file bytes (0=unlimited)",
+                "type": "int",
+            },
             {"key": "max_indexes", "label": "Max indexes (0=unlimited)", "type": "int"},
             {
                 "key": "skip_extensions",
                 "label": "Skip extensions (one per line, e.g. .mp4)",
                 "type": "list",
             },
-            {"key": "recurse_directories", "label": "Recurse directories", "type": "bool"},
+            {
+                "key": "recurse_directories",
+                "label": "Recurse directories",
+                "type": "bool",
+            },
         ],
     },
     {
@@ -80,11 +154,27 @@ FORM_GROUPS: list[dict[str, Any]] = [
             {"key": "magnets_csv", "label": "Magnets CSV URL", "type": "text"},
             {"key": "releases_rss", "label": "Releases RSS URL", "type": "text"},
             {"key": "site_rss", "label": "Site RSS URL", "type": "text"},
-            {"key": "download_dir", "label": "Download dir", "type": "text"},
-            {"key": "aria2_rpc", "label": "aria2 RPC URL (optional)", "type": "text_nullable"},
-            {"key": "aria2_secret", "label": "aria2 RPC secret (optional)", "type": "text_nullable"},
+            {
+                "key": "download_dir",
+                "label": "Torrent staging dir (local disk for aria2)",
+                "type": "text",
+            },
+            {
+                "key": "aria2_rpc",
+                "label": "aria2 RPC URL (optional)",
+                "type": "text_nullable",
+            },
+            {
+                "key": "aria2_secret",
+                "label": "aria2 RPC secret (optional)",
+                "type": "text_nullable",
+            },
             {"key": "use_cli", "label": "Use aria2 CLI", "type": "bool"},
-            {"key": "max_concurrent_torrents", "label": "Max concurrent torrents", "type": "int"},
+            {
+                "key": "max_concurrent_torrents",
+                "label": "Max concurrent torrents",
+                "type": "int",
+            },
             {"key": "seed_ratio", "label": "Seed ratio", "type": "float"},
             {"key": "seed_time_minutes", "label": "Seed time (minutes)", "type": "int"},
         ],
@@ -94,7 +184,11 @@ FORM_GROUPS: list[dict[str, Any]] = [
         "title": "Scheduler",
         "section": "schedule",
         "fields": [
-            {"key": "site_interval_hours", "label": "Site interval (hours)", "type": "float"},
+            {
+                "key": "site_interval_hours",
+                "label": "Site interval (hours)",
+                "type": "float",
+            },
             {
                 "key": "data_index_interval_hours",
                 "label": "Data index interval (hours)",
@@ -105,7 +199,11 @@ FORM_GROUPS: list[dict[str, Any]] = [
                 "label": "Torrent index interval (hours)",
                 "type": "float",
             },
-            {"key": "full_reconcile_days", "label": "Full reconcile (days)", "type": "float"},
+            {
+                "key": "full_reconcile_days",
+                "label": "Full reconcile (days)",
+                "type": "float",
+            },
             {
                 "key": "continuous",
                 "label": "Continuous drain (keep crawling pending queue)",
@@ -191,7 +289,6 @@ def config_dict_from_form(form: dict[str, str]) -> dict[str, Any]:
             raw = form.get(name, "")
             ftype = field["type"]
             if ftype == "bool":
-                # unchecked checkboxes may be missing; use hidden+checkbox pattern value
                 target[field["key"]] = _parse_bool(raw)
             elif ftype == "list":
                 target[field["key"]] = _parse_list(raw)

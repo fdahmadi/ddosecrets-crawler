@@ -1,8 +1,20 @@
-# Docker laptop preview — slow, metadata/HTML only, no bulk downloads
+# Docker laptop preview — remote/local PostgreSQL + MinIO via env overrides
 
-mirror_root: /data/mirror
-state_db: /data/state/mirror.db
-catalog_db: /data/state/catalog.db
+database:
+  url: "postgresql://ddosecrets:CHANGE_ME@postgres:5432/ddosecrets"
+
+storage:
+  backend: minio
+  endpoint: "minio:9000"
+  access_key: "minioadmin"
+  secret_key: "minioadmin"
+  bucket: "ddosecrets-mirror"
+  secure: false
+  region: null
+  prefix: ""
+  staging_dir: /data/staging
+  mirror_root: /data/mirror
+
 user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 
 seeds:
@@ -45,7 +57,7 @@ torrent:
   magnets_csv: https://torrents.ddosecrets.org/magnets.csv
   releases_rss: https://torrents.ddosecrets.org/releases.xml
   site_rss: https://ddosecrets.org/feed/rss.xml
-  download_dir: /data/mirror/torrents
+  download_dir: /data/staging/torrents
   aria2_rpc: null
   aria2_secret: null
   use_cli: false

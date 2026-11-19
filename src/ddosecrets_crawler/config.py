@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -46,7 +47,7 @@ class TorrentConfig:
     magnets_csv: str = "https://torrents.ddosecrets.org/magnets.csv"
     releases_rss: str = "https://torrents.ddosecrets.org/releases.xml"
     site_rss: str = "https://ddosecrets.org/feed/rss.xml"
-    download_dir: str = "./mirror/torrents"
+    download_dir: str = "./staging/torrents"
     aria2_rpc: str | None = None
     aria2_secret: str | None = None
     use_cli: bool = True
@@ -74,18 +75,43 @@ class LoggingConfig:
 
 
 @dataclass
-class AppConfig:
+class DatabaseConfig:
+    """PostgreSQL connection (typically on a dedicated DB host)."""
+
+    url: str = ""
+
+
+@dataclass
+class StorageConfig:
+    """
+    Mirror object storage.
+
+    backend=minio  → remote MinIO/S3 (typically another host)
+    backend=local  → local filesystem under mirror_root (dev/fallback)
+    """
+
+    backend: str = "minio"
     mirror_root: str = "./mirror"
-    state_db: str = "./state/mirror.db"
-    catalog_db: str = "./state/catalog.db"
+    endpoint: str = ""
+    access_key: str = ""
+    secret_key: str = ""
+    bucket: str = "ddosecrets-mirror"
+    secure: bool = True
+    region: str | None = None
+    prefix: str = ""
+    staging_dir: str = "./staging"
+
+
+@dataclass
+class AppConfig:
     user_agent: str = (
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     )
     seeds: list[str] = field(default_factory=list)
-    allowed_host_suffixes: list[str] = field(
-        default_factory=lambda: ["ddosecrets.org"]
-    )
+    allowed_host_suffixes: list[str] = field(default_factory=lambda: ["ddosecrets.org"])
+    database: DatabaseConfig = field(default_factory=DatabaseConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
     polite: PoliteConfig = field(default_factory=PoliteConfig)
     site: SiteConfig = field(default_factory=SiteConfig)
     data: DataConfig = field(default_factory=DataConfig)
@@ -93,17 +119,18 @@ class AppConfig:
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
+    # Legacy aliases kept for templates / migration messages
+    @property
+    def mirror_root(self) -> str:
+        return self.storage.mirror_root
+
     @property
     def mirror_path(self) -> Path:
-        return Path(self.mirror_root).resolve()
+        return Path(self.storage.mirror_root).resolve()
 
     @property
-    def state_path(self) -> Path:
-        return Path(self.state_db).resolve()
-
-    @property
-    def catalog_path(self) -> Path:
-        return Path(self.catalog_db).resolve()
+    def staging_path(self) -> Path:
+        return Path(self.storage.staging_dir).resolve()
 
 
 def _merge(dc_cls: type, data: dict[str, Any] | None):
@@ -111,6 +138,13 @@ def _merge(dc_cls: type, data: dict[str, Any] | None):
         return dc_cls()
     fields = {f.name for f in dc_cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
     return dc_cls(**{k: v for k, v in data.items() if k in fields})
+
+
+def _env_or(value: str | None, env_key: str, default: str = "") -> str:
+    env = os.environ.get(env_key)
+    if env is not None and env != "":
+        return env
+    return value if value is not None else default
 
 
 def local_config_path(base: str | Path) -> Path:
@@ -162,13 +196,10 @@ def write_local_config(base: str | Path, text: str) -> Path:
         parsed = {}
     if not isinstance(parsed, dict):
         raise ValueError("Config root must be a YAML mapping/object")
-    # Round-trip through load to catch structural issues early
     tmp = Path(base)
     local = local_config_path(base_config_path(tmp))
     local.parent.mkdir(parents=True, exist_ok=True)
-    # Normalize formatting a bit while preserving user content as given
     local.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
-    # Ensure it parses with our loader
     load_config_file(local)
     return local.resolve()
 
@@ -179,6 +210,36 @@ def delete_local_config(base: str | Path) -> bool:
         local.unlink()
         return True
     return False
+
+
+def _load_database(raw: dict[str, Any]) -> DatabaseConfig:
+    db_raw = raw.get("database")
+    if isinstance(db_raw, dict):
+        cfg = _merge(DatabaseConfig, db_raw)
+    else:
+        # Legacy: state_db path is no longer supported as SQLite.
+        cfg = DatabaseConfig(url=str(raw.get("database_url") or ""))
+    cfg.url = _env_or(cfg.url, "DATABASE_URL", cfg.url)
+    return cfg
+
+
+def _load_storage(raw: dict[str, Any]) -> StorageConfig:
+    st_raw = raw.get("storage")
+    if isinstance(st_raw, dict):
+        cfg = _merge(StorageConfig, st_raw)
+    else:
+        # Legacy mirror_root → local backend
+        cfg = StorageConfig(
+            backend="local",
+            mirror_root=str(raw.get("mirror_root") or "./mirror"),
+        )
+    cfg.endpoint = _env_or(cfg.endpoint, "MINIO_ENDPOINT", cfg.endpoint)
+    cfg.access_key = _env_or(cfg.access_key, "MINIO_ACCESS_KEY", cfg.access_key)
+    cfg.secret_key = _env_or(cfg.secret_key, "MINIO_SECRET_KEY", cfg.secret_key)
+    cfg.bucket = _env_or(cfg.bucket, "MINIO_BUCKET", cfg.bucket or "ddosecrets-mirror")
+    if os.environ.get("STORAGE_BACKEND"):
+        cfg.backend = os.environ["STORAGE_BACKEND"]
+    return cfg
 
 
 def load_config_file(path: str | Path) -> AppConfig:
@@ -194,9 +255,6 @@ def load_config_file(path: str | Path) -> AppConfig:
         raise ValueError(f"Invalid config file {path}: root must be a mapping")
 
     return AppConfig(
-        mirror_root=raw.get("mirror_root", "./mirror"),
-        state_db=raw.get("state_db", "./state/mirror.db"),
-        catalog_db=raw.get("catalog_db", "./state/catalog.db"),
         user_agent=raw.get(
             "user_agent",
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -206,6 +264,8 @@ def load_config_file(path: str | Path) -> AppConfig:
         allowed_host_suffixes=list(
             raw.get("allowed_host_suffixes") or ["ddosecrets.org"]
         ),
+        database=_load_database(raw),
+        storage=_load_storage(raw),
         polite=_merge(PoliteConfig, raw.get("polite")),
         site=_merge(SiteConfig, raw.get("site")),
         data=_merge(DataConfig, raw.get("data")),
@@ -222,12 +282,12 @@ def load_config(path: str | Path) -> AppConfig:
 
 
 def ensure_runtime_dirs(cfg: AppConfig) -> None:
-    cfg.mirror_path.mkdir(parents=True, exist_ok=True)
-    cfg.state_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg.catalog_path.parent.mkdir(parents=True, exist_ok=True)
-    Path(cfg.torrent.download_dir).mkdir(parents=True, exist_ok=True)
     Path(cfg.logging.file).parent.mkdir(parents=True, exist_ok=True)
-    (cfg.mirror_path / "site").mkdir(parents=True, exist_ok=True)
-    (cfg.mirror_path / "data").mkdir(parents=True, exist_ok=True)
-    (cfg.mirror_path / "torrents").mkdir(parents=True, exist_ok=True)
-    (cfg.mirror_path / "metadata").mkdir(parents=True, exist_ok=True)
+    cfg.staging_path.mkdir(parents=True, exist_ok=True)
+    Path(cfg.torrent.download_dir).mkdir(parents=True, exist_ok=True)
+    if cfg.storage.backend == "local":
+        cfg.mirror_path.mkdir(parents=True, exist_ok=True)
+        (cfg.mirror_path / "site").mkdir(parents=True, exist_ok=True)
+        (cfg.mirror_path / "data").mkdir(parents=True, exist_ok=True)
+        (cfg.mirror_path / "torrents").mkdir(parents=True, exist_ok=True)
+        (cfg.mirror_path / "metadata").mkdir(parents=True, exist_ok=True)

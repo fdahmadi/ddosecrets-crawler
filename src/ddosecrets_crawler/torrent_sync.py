@@ -7,7 +7,6 @@ import json
 import logging
 import re
 import shutil
-import subprocess
 from pathlib import Path
 from urllib.parse import unquote, urljoin, urlparse
 from xml.etree import ElementTree as ET
@@ -19,17 +18,25 @@ from .config import AppConfig
 from .db import StateDB
 from .html_rewrite import rewrite_html_links
 from .http_client import PoliteHttpClient
-from .urls import host_of, magnet_infohash, mirror_local_path, sha256_bytes
+from .storage import MirrorStorage, mirror_object_key, normalize_key
+from .urls import host_of, magnet_infohash, sha256_bytes
 
 log = logging.getLogger(__name__)
 CSS_URL_RE = re.compile(r"url\(\s*['\"]?([^'\")]+)['\"]?\s*\)", re.I)
 
 
 class TorrentSync:
-    def __init__(self, cfg: AppConfig, db: StateDB, http: PoliteHttpClient):
+    def __init__(
+        self,
+        cfg: AppConfig,
+        db: StateDB,
+        http: PoliteHttpClient,
+        storage: MirrorStorage,
+    ):
         self.cfg = cfg
         self.db = db
         self.http = http
+        self.storage = storage
         self.stats = {
             "csv_rows": 0,
             "new_magnets": 0,
@@ -48,14 +55,14 @@ class TorrentSync:
 
     def _copy_torrent_index_sidecars(self) -> None:
         """Expose magnets.csv / releases.xml next to the torrents homepage."""
-        dest_root = self.cfg.mirror_path / "site" / "torrents.ddosecrets.org"
-        if not dest_root.is_dir():
+        home_key = "site/torrents.ddosecrets.org/index.html"
+        if not self.storage.exists(home_key):
             return
-        meta = self.cfg.mirror_path / "metadata"
         for name in ("magnets.csv", "releases.xml"):
-            src = meta / name
-            if src.is_file():
-                (dest_root / name).write_bytes(src.read_bytes())
+            src_key = f"metadata/{name}"
+            if self.storage.exists(src_key):
+                dest_key = f"site/torrents.ddosecrets.org/{name}"
+                self.storage.put_bytes(dest_key, self.storage.get_bytes(src_key))
 
     async def _sync_torrents_home(self) -> None:
         """Save torrents subdomain homepage so Domains can open a local mirror."""
@@ -68,19 +75,18 @@ class TorrentSync:
         if result.status_code >= 400:
             log.warning("torrents home HTTP %s", result.status_code)
             return
-        local = mirror_local_path(self.cfg.mirror_path, url, section="site")
-        local.parent.mkdir(parents=True, exist_ok=True)
+        key = mirror_object_key(url, section="site")
         rewritten = rewrite_html_links(
             result.text,
             page_url=url,
             allowed_host_suffixes=self.cfg.allowed_host_suffixes,
         )
-        local.write_text(rewritten, encoding="utf-8")
+        self.storage.put_text(key, rewritten, content_type="text/html; charset=utf-8")
         self.db.upsert_resource(
             url=url,
             kind="page",
             host=host_of(url),
-            local_path=str(local),
+            local_path=key,
             content_type=result.content_type,
             etag=result.etag,
             last_modified=result.last_modified,
@@ -89,12 +95,10 @@ class TorrentSync:
             http_status=result.status_code,
             error=None,
         )
-        log.info("Saved torrents homepage → %s", local)
-        await self._sync_torrents_page_assets(url, result.text, local.parent)
+        log.info("Saved torrents homepage → %s", key)
+        await self._sync_torrents_page_assets(url, result.text)
 
-    async def _sync_torrents_page_assets(
-        self, page_url: str, html: str, dest_root: Path
-    ) -> None:
+    async def _sync_torrents_page_assets(self, page_url: str, html: str) -> None:
         """Download CSS/JS/images referenced by the torrents homepage (relative paths)."""
         soup = BeautifulSoup(html, "lxml")
         asset_urls: list[str] = []
@@ -107,9 +111,24 @@ class TorrentSync:
                 if host_of(abs_u) != "torrents.ddosecrets.org":
                     continue
                 path = urlparse(abs_u).path.lower()
-                if path.endswith(
-                    (".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2")
-                ) or "/css/" in path or "/img/" in path:
+                if (
+                    path.endswith(
+                        (
+                            ".css",
+                            ".js",
+                            ".png",
+                            ".jpg",
+                            ".jpeg",
+                            ".gif",
+                            ".svg",
+                            ".ico",
+                            ".woff",
+                            ".woff2",
+                        )
+                    )
+                    or "/css/" in path
+                    or "/img/" in path
+                ):
                     asset_urls.append(abs_u)
 
         # Common files linked relatively from the page body
@@ -124,7 +143,7 @@ class TorrentSync:
             rel = unquote(urlparse(asset_url).path).lstrip("/")
             if not rel:
                 continue
-            dest = dest_root / rel
+            key = normalize_key(f"site/torrents.ddosecrets.org/{rel}")
             try:
                 res = await self.http.get(asset_url)
             except Exception as exc:  # noqa: BLE001
@@ -133,19 +152,18 @@ class TorrentSync:
             if res.status_code >= 400:
                 log.warning("torrents asset HTTP %s for %s", res.status_code, asset_url)
                 continue
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(res.content)
+            self.storage.put_bytes(key, res.content, content_type=res.content_type)
             self.db.upsert_resource(
                 url=asset_url,
                 kind="static",
                 host=host_of(asset_url),
-                local_path=str(dest),
+                local_path=key,
                 content_type=res.content_type,
                 status="done",
                 http_status=res.status_code,
                 sha256=sha256_bytes(res.content),
             )
-            log.info("Saved torrents asset → %s", dest)
+            log.info("Saved torrents asset → %s", key)
 
             # Pull url(...) references from CSS
             if rel.lower().endswith(".css"):
@@ -169,10 +187,9 @@ class TorrentSync:
             log.error("magnets.csv HTTP %s", result.status_code)
             return
         text = result.text
-        # Persist raw CSV
-        out = self.cfg.mirror_path / "metadata" / "magnets.csv"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(text, encoding="utf-8")
+        self.storage.put_text(
+            "metadata/magnets.csv", text, content_type="text/csv; charset=utf-8"
+        )
 
         reader = csv.reader(io.StringIO(text))
         for row in reader:
@@ -205,8 +222,11 @@ class TorrentSync:
         if result.status_code >= 400:
             log.warning("releases RSS HTTP %s", result.status_code)
             return
-        path = self.cfg.mirror_path / "metadata" / "releases.xml"
-        path.write_bytes(result.content)
+        self.storage.put_bytes(
+            "metadata/releases.xml",
+            result.content,
+            content_type=result.content_type or "application/xml",
+        )
         self._ingest_rss_bytes(result.content, source=url)
 
     async def _sync_site_rss(self) -> None:
@@ -215,8 +235,11 @@ class TorrentSync:
         if result.status_code >= 400:
             log.warning("site RSS HTTP %s", result.status_code)
             return
-        path = self.cfg.mirror_path / "metadata" / "site_rss.xml"
-        path.write_bytes(result.content)
+        self.storage.put_bytes(
+            "metadata/site_rss.xml",
+            result.content,
+            content_type=result.content_type or "application/xml",
+        )
         self._ingest_site_rss(result.text, source=url)
 
     def _ingest_rss_bytes(self, content: bytes, *, source: str) -> None:
@@ -357,11 +380,14 @@ class TorrentSync:
                     self.db.update_magnet(infohash, status="error", error=str(exc))
                     log.exception("aria2 RPC add failed for %s: %s", infohash, exc)
 
-    def export_magnet_queue(self, path: Path) -> int:
+    def export_magnet_queue(self, key: str = "metadata/magnet_queue.json") -> int:
         rows = self.db.conn.execute(
             "SELECT infohash, title, magnet, status FROM magnets ORDER BY title"
         ).fetchall()
-        path.parent.mkdir(parents=True, exist_ok=True)
         items = [dict(r) for r in rows]
-        path.write_text(json.dumps(items, indent=2), encoding="utf-8")
+        self.storage.put_text(
+            key,
+            json.dumps(items, indent=2),
+            content_type="application/json; charset=utf-8",
+        )
         return len(items)
