@@ -1,0 +1,43 @@
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: ddosecrets-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio_data:/data
+
+  # One-shot: create the mirror bucket after MinIO is up
+  minio-init:
+    image: minio/mc:latest
+    container_name: ddosecrets-minio-init
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "
+      set -e;
+      echo 'Waiting for MinIO...';
+      i=0;
+      until mc alias set local http://minio:9000 \"$${MINIO_ROOT_USER}\" \"$${MINIO_ROOT_PASSWORD}\" 2>/dev/null; do
+        i=$$((i+1));
+        if [ $$i -gt 30 ]; then echo 'MinIO not ready'; exit 1; fi;
+        sleep 2;
+      done;
+      mc mb --ignore-existing \"local/$${MINIO_BUCKET}\";
+      echo \"Bucket ready: $${MINIO_BUCKET}\";
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-ddosecrets-mirror}
+    restart: "no"
+
+volumes:
+  minio_data:
