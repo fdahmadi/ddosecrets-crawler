@@ -110,6 +110,9 @@ class AppConfig:
     )
     seeds: list[str] = field(default_factory=list)
     allowed_host_suffixes: list[str] = field(default_factory=lambda: ["ddosecrets.org"])
+    # Higher number = higher scheduler priority. Unlisted hosts default to 0.
+    # Example: data.ddosecrets.org: 100, ddosecrets.org: 10
+    host_priorities: dict[str, int] = field(default_factory=dict)
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     polite: PoliteConfig = field(default_factory=PoliteConfig)
@@ -131,6 +134,69 @@ class AppConfig:
     @property
     def staging_path(self) -> Path:
         return Path(self.storage.staging_dir).resolve()
+
+
+def _normalize_host(host: str) -> str:
+    return (host or "").lower().strip().strip(".")
+
+
+def host_priority(cfg: AppConfig, host: str) -> int:
+    """
+    Priority for a hostname. Exact match wins; otherwise longest suffix match
+    (e.g. entry `ddosecrets.org` applies to `www.ddosecrets.org`).
+    """
+    host = _normalize_host(host)
+    if not host:
+        return 0
+    prios = {
+        _normalize_host(k): int(v)
+        for k, v in (cfg.host_priorities or {}).items()
+        if k is not None and str(k).strip() != ""
+    }
+    if not prios:
+        return 0
+    if host in prios:
+        return prios[host]
+    best: int | None = None
+    best_len = -1
+    for pattern, prio in prios.items():
+        if host == pattern or host.endswith("." + pattern):
+            if len(pattern) > best_len:
+                best_len = len(pattern)
+                best = prio
+    return int(best) if best is not None else 0
+
+
+# Crawl modes → representative hosts used for priority lookup
+MODE_HOSTS: dict[str, tuple[str, ...]] = {
+    "data": ("data.ddosecrets.org",),
+    "site": ("ddosecrets.org", "www.ddosecrets.org"),
+    "torrent": ("torrents.ddosecrets.org",),
+}
+
+
+def mode_priority(cfg: AppConfig, mode: str) -> int:
+    """Max host_priority among hosts served by this scheduler mode."""
+    hosts = MODE_HOSTS.get(mode, ())
+    if not hosts:
+        return 0
+    return max(host_priority(cfg, h) for h in hosts)
+
+
+def _load_host_priorities(raw: dict[str, Any]) -> dict[str, int]:
+    src = raw.get("host_priorities") or {}
+    if not isinstance(src, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key, value in src.items():
+        host = _normalize_host(str(key))
+        if not host:
+            continue
+        try:
+            out[host] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def _merge(dc_cls: type, data: dict[str, Any] | None):
@@ -264,6 +330,7 @@ def load_config_file(path: str | Path) -> AppConfig:
         allowed_host_suffixes=list(
             raw.get("allowed_host_suffixes") or ["ddosecrets.org"]
         ),
+        host_priorities=_load_host_priorities(raw),
         database=_load_database(raw),
         storage=_load_storage(raw),
         polite=_merge(PoliteConfig, raw.get("polite")),

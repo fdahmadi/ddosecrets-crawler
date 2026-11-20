@@ -34,6 +34,13 @@ seeds:
 allowed_host_suffixes:
   - ddosecrets.org
 
+# Scheduler priority per host (higher number runs first). Unlisted hosts = 0.
+# Suffix match applies (ddosecrets.org also covers www.ddosecrets.org).
+host_priorities:
+  data.ddosecrets.org: 100
+  ddosecrets.org: 10
+  torrents.ddosecrets.org: 5
+
 # Human-like request pacing (seconds)
 polite:
   min_delay: 3.0

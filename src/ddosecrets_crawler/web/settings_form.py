@@ -65,6 +65,11 @@ FORM_GROUPS: list[dict[str, Any]] = [
                 "label": "Allowed host suffixes (one per line)",
                 "type": "list",
             },
+            {
+                "key": "host_priorities",
+                "label": "Host priorities (host: number, higher = first)",
+                "type": "host_priorities",
+            },
         ],
     },
     {
@@ -255,6 +260,13 @@ def form_values_from_config(data: dict[str, Any]) -> dict[str, str]:
                     out[name] = ""
                 else:
                     out[name] = str(raw)
+            elif ftype == "host_priorities":
+                if isinstance(raw, dict):
+                    out[name] = "\n".join(f"{k}: {v}" for k, v in raw.items())
+                elif raw is None:
+                    out[name] = ""
+                else:
+                    out[name] = str(raw)
             elif ftype == "bool":
                 out[name] = "true" if bool(raw) else "false"
             elif ftype == "text_nullable":
@@ -277,6 +289,27 @@ def _parse_list(value: str) -> list[str]:
     return items
 
 
+def _parse_host_priorities(value: str) -> dict[str, int]:
+    """Parse lines like 'data.ddosecrets.org: 100' or 'host=10'."""
+    out: dict[str, int] = {}
+    for line in value.splitlines():
+        item = line.strip()
+        if not item or item.startswith("#"):
+            continue
+        if ":" in item:
+            host, _, rest = item.partition(":")
+        elif "=" in item:
+            host, _, rest = item.partition("=")
+        else:
+            continue
+        host = host.strip()
+        try:
+            out[host] = int(rest.strip())
+        except ValueError:
+            continue
+    return out
+
+
 def config_dict_from_form(form: dict[str, str]) -> dict[str, Any]:
     data: dict[str, Any] = {}
     for group in FORM_GROUPS:
@@ -292,6 +325,8 @@ def config_dict_from_form(form: dict[str, str]) -> dict[str, Any]:
                 target[field["key"]] = _parse_bool(raw)
             elif ftype == "list":
                 target[field["key"]] = _parse_list(raw)
+            elif ftype == "host_priorities":
+                target[field["key"]] = _parse_host_priorities(raw)
             elif ftype == "int":
                 target[field["key"]] = int(raw or 0)
             elif ftype == "float":

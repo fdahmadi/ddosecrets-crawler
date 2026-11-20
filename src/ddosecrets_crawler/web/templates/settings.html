@@ -56,7 +56,7 @@
                   <option value="true" {% if form_values.get(name) == 'true' %}selected{% endif %}>true</option>
                   <option value="false" {% if form_values.get(name) != 'true' %}selected{% endif %}>false</option>
                 </select>
-              {% elif field.type == 'list' %}
+              {% elif field.type == 'list' or field.type == 'host_priorities' %}
                 <textarea name="{{ name }}" rows="4" spellcheck="false">{{ form_values.get(name, '') }}</textarea>
               {% elif field.type in ['int', 'float'] %}
                 <input type="number" step="{% if field.type == 'float' %}any{% else %}1{% endif %}" name="{{ name }}" value="{{ form_values.get(name, '') }}" />

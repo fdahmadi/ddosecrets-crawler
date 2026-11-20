@@ -28,6 +28,11 @@ seeds:
 allowed_host_suffixes:
   - ddosecrets.org
 
+host_priorities:
+  data.ddosecrets.org: 100
+  ddosecrets.org: 10
+  torrents.ddosecrets.org: 5
+
 polite:
   min_delay: 3.0
   max_delay: 12.0
