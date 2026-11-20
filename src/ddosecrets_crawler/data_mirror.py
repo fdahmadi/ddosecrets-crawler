@@ -136,22 +136,52 @@ class DataMirror:
             )
         return entries
 
+    @staticmethod
+    def _path_depth(url: str) -> int:
+        path = urlparse(url).path or "/"
+        return path.count("/")
+
+    def _depth_first(self) -> bool:
+        mode = (self.cfg.data.traverse or "depth_first").strip().lower()
+        return mode != "breadth_first"
+
+    def _enqueue_dirs(self, queue: deque[str], dirs: list[str]) -> None:
+        """Push child dirs onto the work queue (DFS front, BFS back)."""
+        if not dirs:
+            return
+        if self._depth_first():
+            # extendleft reverses; feed reversed so listing order is preserved
+            queue.extendleft(reversed(dirs))
+        else:
+            queue.extend(dirs)
+
     async def mirror(self) -> dict:
         """
         Crawl data.* directory indexes.
 
+        Default traverse=depth_first: finish files + nested dirs inside one
+        folder before moving to the next sibling. breadth_first visits every
+        folder at a level before going deeper.
+
         Discovered subdirectories are stored as pending data_index rows so the
-        scheduler can resume across batches (max_indexes) without restarting
-        from the seed every time.
+        scheduler can resume across batches (max_indexes).
         """
         queue: deque[str] = deque()
         seen_dirs: set[str] = set()
         force_refresh: set[str] = set()
+        depth_first = self._depth_first()
 
+        pending_urls: list[str] = []
         for row in self.db.iter_resources(kind="data_index", status="pending"):
             host = (row["host"] or "").lower()
             if host.startswith("data."):
-                queue.append(row["url"])
+                pending_urls.append(row["url"])
+
+        # Resume deepest pending paths first when using DFS
+        if depth_first:
+            pending_urls.sort(key=lambda u: (-self._path_depth(u), u))
+        for url in pending_urls:
+            queue.append(url)
 
         for seed in self._data_seeds():
             existing = self.db.get_resource(seed)
@@ -170,8 +200,9 @@ class DataMirror:
                 force_refresh.add(seed)
 
         log.info(
-            "Data mirror queue size=%d (pending + seeds)",
+            "Data mirror queue size=%d traverse=%s",
             len(queue),
+            "depth_first" if depth_first else "breadth_first",
         )
 
         while queue:
@@ -253,6 +284,9 @@ class DataMirror:
         )
 
         entries = self.parse_listing(index_url, result.text)
+        child_dirs: list[str] = []
+        file_entries: list[ListingEntry] = []
+
         for entry in entries:
             if entry.magnet:
                 ih = magnet_infohash(entry.magnet)
@@ -277,13 +311,17 @@ class DataMirror:
                             host=host_of(child),
                             status="pending",
                         )
-                        queue.append(child)
+                        child_dirs.append(child)
                         self.stats["dirs_queued"] += 1
                     elif prev["status"] != "done":
-                        queue.append(child)
+                        child_dirs.append(child)
                         self.stats["dirs_queued"] += 1
                 continue
 
+            file_entries.append(entry)
+
+        # Files in this folder first, then recurse into children (DFS/BFS via queue)
+        for entry in file_entries:
             try:
                 await self._maybe_download_file(entry)
             except Exception as exc:  # noqa: BLE001
@@ -292,6 +330,8 @@ class DataMirror:
                 self.db.mark_resource(
                     entry.href, "error", kind="data_file", error=str(exc)
                 )
+
+        self._enqueue_dirs(queue, child_dirs)
 
     async def _sync_page_assets(self, page_url: str, html: str) -> None:
         """Download small page chrome assets (logo/CSS/icons) referenced by an index."""

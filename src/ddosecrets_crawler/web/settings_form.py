@@ -148,6 +148,11 @@ FORM_GROUPS: list[dict[str, Any]] = [
                 "label": "Recurse directories",
                 "type": "bool",
             },
+            {
+                "key": "traverse",
+                "label": "Traverse (depth_first | breadth_first)",
+                "type": "text",
+            },
         ],
     },
     {

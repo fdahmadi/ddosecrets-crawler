@@ -70,6 +70,8 @@ data:
   max_indexes: 0            # 0 = unlimited directory pages; useful for tests
   skip_extensions: []
   recurse_directories: true
+  # depth_first: finish one release folder before siblings; breadth_first: level by level
+  traverse: depth_first
 
 # Torrent / magnet sync (aria2 still needs a local staging directory)
 torrent:

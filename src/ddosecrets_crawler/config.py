@@ -39,6 +39,9 @@ class DataConfig:
     max_indexes: int = 0  # 0 = unlimited directory pages
     skip_extensions: list[str] = field(default_factory=list)
     recurse_directories: bool = True
+    # depth_first: finish one folder tree before siblings.
+    # breadth_first: visit all folders at a level before going deeper.
+    traverse: str = "depth_first"
 
 
 @dataclass

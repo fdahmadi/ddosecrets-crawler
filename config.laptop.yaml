@@ -61,6 +61,7 @@ data:
   max_indexes: 3            # only a few directory pages
   skip_extensions: []
   recurse_directories: true
+  traverse: depth_first
 
 torrent:
   enabled: true
