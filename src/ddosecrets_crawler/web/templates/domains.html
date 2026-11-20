@@ -25,13 +25,16 @@
       <div class="meta" style="margin-top:0.35rem;">
         <span class="badge">{{ d.section }}</span>
         {% if d.has_mirror %}<span class="chip">mirrored</span>{% else %}<span class="chip warn">no local files yet</span>{% endif %}
+        {% if d.mirror_port %}<span class="chip">port {{ d.mirror_port }}</span>{% endif %}
         <span>{{ d.disk_human }} on disk</span>
         {% if d.source_url %}<a href="{{ d.source_url }}" target="_blank" rel="noopener">source</a>{% endif %}
       </div>
     </div>
     <div class="domain-actions">
       {% if d.open_url %}
-        <a class="btn" href="{{ d.open_url }}" target="_blank" rel="noopener">Open mirror</a>
+        <a class="btn" href="{{ d.open_url }}" target="_blank" rel="noopener">
+          {% if d.mirror_port %}Open mirror :{{ d.mirror_port }}{% else %}Open mirror{% endif %}
+        </a>
         {% if d.browse_url %}<a class="btn secondary" href="{{ d.browse_url }}" target="_blank" rel="noopener">Browse files</a>{% endif %}
       {% else %}
         <span class="chip warn">crawl this host first</span>

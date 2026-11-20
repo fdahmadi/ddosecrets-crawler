@@ -78,6 +78,35 @@ class LoggingConfig:
 
 
 @dataclass
+class MirrorPortConfig:
+    """One mirrored hostname served on its own TCP port (root path = original URL path)."""
+
+    port: int
+    section: str | None = None  # auto: data.* → data, else site
+
+
+@dataclass
+class ServeConfig:
+    """
+    Admin UI + optional per-host mirror listeners.
+
+    Example:
+      serve:
+        admin_port: 8090
+        mirrors:
+          data.ddosecrets.org: { port: 8092 }
+          ddosecrets.org: { port: 8091 }
+    """
+
+    admin_port: int = 8090
+    bind_host: str = "0.0.0.0"
+    # Optional public base like http://203.0.113.10 (no trailing slash) for
+    # cross-host rewrite to other mirror ports. Empty = path-only same-host.
+    public_base: str = ""
+    mirrors: dict[str, MirrorPortConfig] = field(default_factory=dict)
+
+
+@dataclass
 class DatabaseConfig:
     """PostgreSQL connection (typically on a dedicated DB host)."""
 
@@ -124,6 +153,7 @@ class AppConfig:
     torrent: TorrentConfig = field(default_factory=TorrentConfig)
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    serve: ServeConfig = field(default_factory=ServeConfig)
 
     # Legacy aliases kept for templates / migration messages
     @property
@@ -137,6 +167,33 @@ class AppConfig:
     @property
     def staging_path(self) -> Path:
         return Path(self.storage.staging_dir).resolve()
+
+    def mirror_port_for(self, host: str) -> int | None:
+        host = _normalize_host(host)
+        mirrors = self.serve.mirrors or {}
+        if host in mirrors:
+            return int(mirrors[host].port)
+        for pattern, mp in mirrors.items():
+            pat = _normalize_host(pattern)
+            if host == pat or host.endswith("." + pat):
+                return int(mp.port)
+        return None
+
+    def mirror_section_for(self, host: str) -> str:
+        host = _normalize_host(host)
+        mirrors = self.serve.mirrors or {}
+        entry = mirrors.get(host)
+        if entry is None:
+            for pattern, mp in mirrors.items():
+                pat = _normalize_host(pattern)
+                if host == pat or host.endswith("." + pat):
+                    entry = mp
+                    break
+        if entry is not None and entry.section:
+            return str(entry.section)
+        if host.startswith("data."):
+            return "data"
+        return "site"
 
 
 def _normalize_host(host: str) -> str:
@@ -200,6 +257,35 @@ def _load_host_priorities(raw: dict[str, Any]) -> dict[str, int]:
         except (TypeError, ValueError):
             continue
     return out
+
+
+def _load_serve(raw: dict[str, Any]) -> ServeConfig:
+    src = raw.get("serve")
+    if not isinstance(src, dict):
+        return ServeConfig()
+    mirrors_raw = src.get("mirrors") or {}
+    mirrors: dict[str, MirrorPortConfig] = {}
+    if isinstance(mirrors_raw, dict):
+        for host, val in mirrors_raw.items():
+            key = _normalize_host(str(host))
+            if not key:
+                continue
+            if isinstance(val, dict):
+                port = int(val.get("port") or 0)
+                section = val.get("section")
+                section_s = str(section) if section else None
+            else:
+                port = int(val)
+                section_s = None
+            if port <= 0:
+                continue
+            mirrors[key] = MirrorPortConfig(port=port, section=section_s)
+    return ServeConfig(
+        admin_port=int(src.get("admin_port") or 8090),
+        bind_host=str(src.get("bind_host") or "0.0.0.0"),
+        public_base=str(src.get("public_base") or "").rstrip("/"),
+        mirrors=mirrors,
+    )
 
 
 def _merge(dc_cls: type, data: dict[str, Any] | None):
@@ -342,6 +428,7 @@ def load_config_file(path: str | Path) -> AppConfig:
         torrent=_merge(TorrentConfig, raw.get("torrent")),
         schedule=_merge(ScheduleConfig, raw.get("schedule")),
         logging=_merge(LoggingConfig, raw.get("logging")),
+        serve=_load_serve(raw),
     )
 
 

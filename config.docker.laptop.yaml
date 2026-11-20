@@ -31,6 +31,18 @@ host_priorities:
   ddosecrets.org: 10
   torrents.ddosecrets.org: 5
 
+serve:
+  admin_port: 8090
+  bind_host: "0.0.0.0"
+  public_base: ""
+  mirrors:
+    ddosecrets.org:
+      port: 8091
+    data.ddosecrets.org:
+      port: 8092
+    torrents.ddosecrets.org:
+      port: 8093
+
 polite:
   min_delay: 8.0
   max_delay: 20.0

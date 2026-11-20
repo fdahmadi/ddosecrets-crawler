@@ -261,6 +261,11 @@ class DataMirror:
             result.text,
             page_url=index_page,
             allowed_host_suffixes=self.cfg.allowed_host_suffixes,
+            mode="mirror",
+            mirror_ports={
+                h: mp.port for h, mp in (self.cfg.serve.mirrors or {}).items()
+            },
+            public_base=self.cfg.serve.public_base or "",
         )
         self.storage.put_text(
             index_key, rewritten, content_type="text/html; charset=utf-8"

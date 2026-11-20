@@ -41,6 +41,20 @@ host_priorities:
   ddosecrets.org: 10
   torrents.ddosecrets.org: 5
 
+# Admin UI + one TCP port per mirrored host (path = original URL path)
+serve:
+  admin_port: 8090
+  bind_host: "0.0.0.0"
+  # Optional: http://YOUR_VPS_IP  (enables cross-host links between mirror ports)
+  public_base: ""
+  mirrors:
+    ddosecrets.org:
+      port: 8091
+    data.ddosecrets.org:
+      port: 8092
+    torrents.ddosecrets.org:
+      port: 8093
+
 # Human-like request pacing (seconds)
 polite:
   min_delay: 3.0

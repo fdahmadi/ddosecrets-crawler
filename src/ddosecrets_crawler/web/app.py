@@ -170,6 +170,7 @@ def create_app(config_path: str | Path) -> FastAPI:
                 storage,
                 database,
                 seeds=list(cfg.seeds or []),
+                serve_cfg=cfg,
             )
         finally:
             database.close()
@@ -491,13 +492,56 @@ def _unique_json_values(database: StateDB, column: str) -> list[str]:
 
 
 def run_server(
-    config_path: str | Path, host: str = "0.0.0.0", port: int = 8090
+    config_path: str | Path, host: str = "0.0.0.0", port: int | None = None
 ) -> None:
+    """
+    Start admin UI and any configured per-host mirror listeners.
+
+    Admin: serve.admin_port (or --port override)
+    Mirrors: serve.mirrors.<hostname>.port  (URL path = original site path)
+    """
+    import asyncio
+
     import uvicorn
 
+    from .mirror_app import create_mirror_app
+
     base, local, active = resolve_config_path(config_path)
+    cfg = load_config_file(active)
+    bind = host or cfg.serve.bind_host or "0.0.0.0"
+    admin_port = int(port or cfg.serve.admin_port or 8090)
+
     print(f"Config base:   {base}")
     print(f"Config local:  {local} ({'exists' if local.exists() else 'missing'})")
     print(f"Config active: {active}")
-    app = create_app(config_path)
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    print(f"Admin UI:      http://{bind}:{admin_port}")
+    for mhost, mp in sorted((cfg.serve.mirrors or {}).items()):
+        print(f"Mirror:        http://{bind}:{mp.port}/  ← {mhost}")
+
+    async def _serve_all() -> None:
+        configs: list[uvicorn.Config] = [
+            uvicorn.Config(
+                create_app(config_path),
+                host=bind,
+                port=admin_port,
+                log_level="info",
+                access_log=True,
+            )
+        ]
+        for mhost, mp in (cfg.serve.mirrors or {}).items():
+            configs.append(
+                uvicorn.Config(
+                    create_mirror_app(config_path, mhost),
+                    host=bind,
+                    port=int(mp.port),
+                    log_level="info",
+                    access_log=True,
+                )
+            )
+        servers = [uvicorn.Server(c) for c in configs]
+        # Prevent install signal handlers on every server (only first)
+        for s in servers[1:]:
+            s.install_signal_handlers = False
+        await asyncio.gather(*[s.serve() for s in servers])
+
+    asyncio.run(_serve_all())

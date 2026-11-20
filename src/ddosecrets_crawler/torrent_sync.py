@@ -76,10 +76,18 @@ class TorrentSync:
             log.warning("torrents home HTTP %s", result.status_code)
             return
         key = mirror_object_key(url, section="site")
+        host = host_of(url)
         rewritten = rewrite_html_links(
             result.text,
             page_url=url,
             allowed_host_suffixes=self.cfg.allowed_host_suffixes,
+            mode=(
+                "mirror" if self.cfg.mirror_port_for(host) is not None else "admin"
+            ),
+            mirror_ports={
+                h: mp.port for h, mp in (self.cfg.serve.mirrors or {}).items()
+            },
+            public_base=self.cfg.serve.public_base or "",
         )
         self.storage.put_text(key, rewritten, content_type="text/html; charset=utf-8")
         self.db.upsert_resource(

@@ -4,7 +4,10 @@
 #
 # Server (compose file + .env only, image already present):
 #   docker compose up -d
-#   open http://localhost:8090
+#   open http://localhost:8090          (admin)
+#   open http://localhost:8091/         (ddosecrets.org mirror)
+#   open http://localhost:8092/         (data.ddosecrets.org mirror)
+#   open http://localhost:8093/         (torrents.ddosecrets.org mirror)
 #
 # Build on a machine that has the source tree:
 #   docker compose up -d --build
@@ -30,6 +33,9 @@ services:
     restart: unless-stopped
     ports:
       - "8090:8090"
+      - "8091:8091"
+      - "8092:8092"
+      - "8093:8093"
     volumes:
       - ./staging:/data/staging
       - ./logs:/data/logs

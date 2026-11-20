@@ -160,16 +160,64 @@ def ensure_torrents_domain_mirror(
 
 
 def _domain_entry(
-    storage, section: str, host: str
+    storage,
+    section: str,
+    host: str,
+    *,
+    mirror_port: int | None = None,
+    public_base: str = "",
 ) -> tuple[bool, str | None, str | None]:
     """Return (has_files, open_url, prefix_key)."""
     prefix = f"{section}/{host}"
     entries = storage.list_dir(prefix)
     if not entries and not storage.exists(f"{prefix}/index.html"):
         return False, None, None
+    if mirror_port:
+        base = (public_base or "").rstrip("/")
+        if base:
+            open_url = f"{base}:{mirror_port}/"
+        else:
+            open_url = f"http://127.0.0.1:{mirror_port}/"
+        return True, open_url, prefix
     if storage.exists(f"{prefix}/index.html"):
         return True, f"/files/{prefix}/index.html", prefix
     return True, f"/files/{prefix}/", prefix
+
+
+def _resolve_serve_lookup(serve_cfg) -> tuple[str, Any]:
+    """Return (public_base, port_lookup_fn) from AppConfig or ServeConfig."""
+    public_base = ""
+
+    def _no_port(_host: str) -> int | None:
+        return None
+
+    if serve_cfg is None:
+        return public_base, _no_port
+
+    # Full AppConfig
+    if hasattr(serve_cfg, "mirror_port_for") and hasattr(serve_cfg, "serve"):
+        public_base = (serve_cfg.serve.public_base or "").rstrip("/")
+        return public_base, serve_cfg.mirror_port_for
+
+    # Bare ServeConfig
+    if hasattr(serve_cfg, "mirrors"):
+        public_base = (getattr(serve_cfg, "public_base", "") or "").rstrip("/")
+        mirrors = getattr(serve_cfg, "mirrors", {}) or {}
+
+        def port_for(host: str) -> int | None:
+            host = (host or "").lower()
+            entry = mirrors.get(host)
+            if entry is not None:
+                return int(entry.port)
+            for pattern, mp in mirrors.items():
+                pat = (pattern or "").lower()
+                if host == pat or host.endswith("." + pat):
+                    return int(mp.port)
+            return None
+
+        return public_base, port_for
+
+    return public_base, _no_port
 
 
 def list_mirrored_domains(
@@ -177,9 +225,11 @@ def list_mirrored_domains(
     database,
     *,
     seeds: list[str] | None = None,  # unused; kept for call-site compatibility
+    serve_cfg=None,
 ) -> list[dict[str, Any]]:
     """Build clickable domain list from DB hosts and storage prefixes only."""
     ensure_torrents_domain_mirror(storage)
+    public_base, port_for = _resolve_serve_lookup(serve_cfg)
 
     stats_by_host: dict[str, dict[str, int]] = {}
     for row in database.conn.execute("""
@@ -215,13 +265,30 @@ def list_mirrored_domains(
         if host.startswith("torrents."):
             ensure_torrents_domain_mirror(storage, host=host)
             section = "site"
-        has_files, open_url, prefix = _domain_entry(storage, section, host)
+        mirror_port = port_for(host)
+        # Admin file-browser URL (always on the admin UI)
+        browse_url = None
+        has_files, open_url, prefix = _domain_entry(
+            storage,
+            section,
+            host,
+            mirror_port=mirror_port,
+            public_base=public_base,
+        )
         st = stats_by_host.get(host, {})
         if not has_files and section == "site":
-            has_data, data_url, data_prefix = _domain_entry(storage, "data", host)
+            has_data, data_url, data_prefix = _domain_entry(
+                storage,
+                "data",
+                host,
+                mirror_port=mirror_port,
+                public_base=public_base,
+            )
             if has_data:
                 section = "data"
                 has_files, open_url, prefix = True, data_url, data_prefix
+        if has_files and prefix:
+            browse_url = f"/files/{prefix}/"
         if not has_files and not st:
             continue
         item = {
@@ -229,8 +296,10 @@ def list_mirrored_domains(
             "section": section,
             "source_url": f"https://{host}/",
             "has_mirror": has_files,
+            # Dedicated mirror port when configured; else admin /files/ path
             "open_url": open_url,
-            "browse_url": f"/files/{section}/{host}/" if has_files else None,
+            "browse_url": browse_url,
+            "mirror_port": mirror_port,
             "local_path": prefix,
             "disk_bytes": storage_size_bytes(storage, prefix) if prefix else 0,
             "total": st.get("total", 0),

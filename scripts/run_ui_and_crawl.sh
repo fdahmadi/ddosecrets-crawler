@@ -41,8 +41,9 @@ fi
 start_bg "scheduler" python -m ddosecrets_crawler schedule -c "$CONFIG"
 
 echo
-echo "UI:     http://${HOST}:${PORT}"
-echo "Stats:  http://${HOST}:${PORT}/stats"
-echo "Files:  http://${HOST}:${PORT}/files/"
-echo "Worker: continuous scheduler (see logs/scheduler.log)"
-echo "Stop:   bash scripts/stop_ui_and_crawl.sh"
+echo "Admin:    http://${HOST}:${PORT}"
+echo "Site:     http://${HOST}:8091/   (ddosecrets.org)"
+echo "Data:     http://${HOST}:8092/   (data.ddosecrets.org)"
+echo "Torrents: http://${HOST}:8093/   (torrents.ddosecrets.org)"
+echo "Worker:   continuous scheduler (see logs/scheduler.log)"
+echo "Stop:     bash scripts/stop_ui_and_crawl.sh"

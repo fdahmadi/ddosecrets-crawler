@@ -229,10 +229,21 @@ class SiteCrawler:
 
         if self.cfg.site.save_html:
             if html_text is not None:
+                page = result.final_url or url
+                host = host_of(page)
                 rewritten = rewrite_html_links(
                     html_text,
-                    page_url=result.final_url or url,
+                    page_url=page,
                     allowed_host_suffixes=self.cfg.allowed_host_suffixes,
+                    mode=(
+                        "mirror"
+                        if self.cfg.mirror_port_for(host) is not None
+                        else "admin"
+                    ),
+                    mirror_ports={
+                        h: mp.port for h, mp in (self.cfg.serve.mirrors or {}).items()
+                    },
+                    public_base=self.cfg.serve.public_base or "",
                 )
                 self.storage.put_text(
                     key, rewritten, content_type="text/html; charset=utf-8"
