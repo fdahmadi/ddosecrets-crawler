@@ -1,7 +1,7 @@
 services:
   minio:
-    # Docker Hub minio/minio is gone; official images live on Quay
-    image: quay.io/minio/minio:latest
+    # Prefer pinned Docker Hub tag when Quay auth fails in some networks
+    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2025-06-13T11-33-47Z}
     container_name: ddosecrets-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"

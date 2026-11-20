@@ -88,7 +88,10 @@ class _PgConn:
         return self._conn.execute(_pg_sql(sql), args)
 
     def executemany(self, sql: str, args_seq: Iterable[Iterable[Any]]):
-        return self._conn.executemany(_pg_sql(sql), args_seq)
+        # psycopg3: executemany lives on Cursor, not Connection
+        with self._conn.cursor() as cur:
+            cur.executemany(_pg_sql(sql), args_seq)
+        return cur
 
     def commit(self) -> None:
         self._conn.commit()

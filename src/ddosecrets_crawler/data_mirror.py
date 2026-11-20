@@ -137,20 +137,66 @@ class DataMirror:
         return entries
 
     async def mirror(self) -> dict:
-        queue: deque[str] = deque(self._data_seeds())
+        """
+        Crawl data.* directory indexes.
+
+        Discovered subdirectories are stored as pending data_index rows so the
+        scheduler can resume across batches (max_indexes) without restarting
+        from the seed every time.
+        """
+        queue: deque[str] = deque()
         seen_dirs: set[str] = set()
+        force_refresh: set[str] = set()
+
+        for row in self.db.iter_resources(kind="data_index", status="pending"):
+            host = (row["host"] or "").lower()
+            if host.startswith("data."):
+                queue.append(row["url"])
+
+        for seed in self._data_seeds():
+            existing = self.db.get_resource(seed)
+            if existing is None or existing["status"] in ("pending", "error"):
+                self.db.upsert_resource(
+                    url=seed,
+                    kind="data_index",
+                    host=host_of(seed),
+                    status="pending",
+                )
+                if seed not in queue:
+                    queue.append(seed)
+            elif not queue:
+                # Nothing pending: re-walk seed to discover new directories
+                queue.append(seed)
+                force_refresh.add(seed)
+
+        log.info(
+            "Data mirror queue size=%d (pending + seeds)",
+            len(queue),
+        )
 
         while queue:
             if (
                 self.cfg.data.max_indexes
                 and self.stats["indexes"] >= self.cfg.data.max_indexes
             ):
-                log.info("Reached max_indexes=%s", self.cfg.data.max_indexes)
+                log.info(
+                    "Reached max_indexes=%s (%d dirs still queued)",
+                    self.cfg.data.max_indexes,
+                    len(queue),
+                )
                 break
             index_url = queue.popleft()
             if index_url in seen_dirs:
                 continue
             seen_dirs.add(index_url)
+            existing = self.db.get_resource(index_url)
+            if (
+                existing is not None
+                and existing["status"] == "done"
+                and index_url not in force_refresh
+            ):
+                # Already mirrored in a previous batch; do not burn max_indexes
+                continue
             try:
                 await self._process_index(index_url, queue)
             except Exception as exc:  # noqa: BLE001
@@ -222,8 +268,20 @@ class DataMirror:
 
             if entry.is_dir:
                 if self.cfg.data.recurse_directories:
-                    queue.append(entry.href)
-                    self.stats["dirs_queued"] += 1
+                    child = entry.href
+                    prev = self.db.get_resource(child)
+                    if prev is None or prev["status"] in ("pending", "error"):
+                        self.db.upsert_resource(
+                            url=child,
+                            kind="data_index",
+                            host=host_of(child),
+                            status="pending",
+                        )
+                        queue.append(child)
+                        self.stats["dirs_queued"] += 1
+                    elif prev["status"] != "done":
+                        queue.append(child)
+                        self.stats["dirs_queued"] += 1
                 continue
 
             try:

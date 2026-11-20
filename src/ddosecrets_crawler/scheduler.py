@@ -28,14 +28,23 @@ def _pending_followable(db: StateDB) -> tuple[int, int]:
     return articles, other
 
 
+def _pending_data_indexes(db: StateDB) -> int:
+    """Pending directory indexes on data.* hosts."""
+    n = 0
+    for row in db.iter_resources(kind="data_index", status="pending"):
+        host = (row["host"] or "").lower()
+        if host.startswith("data."):
+            n += 1
+    return n
+
+
 async def run_scheduler(cfg: AppConfig, *, once: bool = False) -> None:
     """
     Continuous incremental worker for VPS / unattended use.
 
-    - Runs torrent-index / site / data on their intervals
-    - When schedule.continuous is true, keeps running site batches while the
-      pending queue still has followable URLs (no manual restarts)
-    - Sleeps briefly between batches; longer idle sleep when the queue is empty
+    Priority order (when enabled):
+      1) data.* directory indexes (highest — drain while continuous)
+      2) torrent-index / site on their intervals (lower priority)
     """
     ensure_runtime_dirs(cfg)
     last_site = 0.0
@@ -53,7 +62,7 @@ async def run_scheduler(cfg: AppConfig, *, once: bool = False) -> None:
 
     log.info(
         "Scheduler started continuous=%s batch_pause=%.0fs idle_sleep=%.0fs "
-        "site_iv=%.0fs data_iv=%.0fs torrent_iv=%.0fs",
+        "site_iv=%.0fs data_iv=%.0fs torrent_iv=%.0fs (priority: data > torrent/site)",
         continuous,
         batch_pause,
         idle_sleep,
@@ -66,7 +75,79 @@ async def run_scheduler(cfg: AppConfig, *, once: bool = False) -> None:
         now = time.time()
         ran_anything = False
 
-        if cfg.torrent.enabled and (now - last_torrent >= torrent_iv):
+        # data.* first: due on interval, first run, or continuous drain of pending dirs
+        while cfg.data.enabled:
+            db = StateDB.from_config(cfg)
+            try:
+                pending_data = _pending_data_indexes(db)
+            finally:
+                db.close()
+            due = (time.time() - last_data) >= data_iv
+            first_run = last_data == 0.0
+            should_run = due or first_run or (continuous and pending_data > 0)
+            if not should_run:
+                break
+
+            if due or first_run:
+                db = StateDB.from_config(cfg)
+                try:
+                    n = db.requeue_for_revalidation(
+                        hosts=["data.ddosecrets.org"],
+                        older_than_seconds=data_iv,
+                        limit=max(int(cfg.data.max_indexes or 100) * 2, 50),
+                        kinds=["data_index"],
+                    )
+                    if n:
+                        log.info(
+                            "Requeued %d stale data indexes for conditional revalidation",
+                            n,
+                        )
+                    pending_data = _pending_data_indexes(db)
+                finally:
+                    db.close()
+
+            log.info(
+                "Scheduler starting mode=data pending_indexes=%d max_indexes=%s",
+                pending_data,
+                cfg.data.max_indexes or "unlimited",
+            )
+            try:
+                await run_pipeline(cfg, mode="data")
+            except Exception:  # noqa: BLE001
+                log.exception("Scheduler mode data failed")
+            last_data = time.time()
+            ran_anything = True
+
+            if not continuous:
+                break
+
+            db = StateDB.from_config(cfg)
+            try:
+                pending_data = _pending_data_indexes(db)
+            finally:
+                db.close()
+            if pending_data <= 0:
+                log.info("Data pending index queue drained")
+                break
+
+            log.info(
+                "Data queue still has %d pending indexes; pausing %.0fs before next batch",
+                pending_data,
+                batch_pause,
+            )
+            await asyncio.sleep(batch_pause)
+
+        # Lower priority: torrent index (skip while data still has pending work)
+        db = StateDB.from_config(cfg)
+        try:
+            pending_data = _pending_data_indexes(db) if cfg.data.enabled else 0
+        finally:
+            db.close()
+        if (
+            cfg.torrent.enabled
+            and pending_data == 0
+            and (time.time() - last_torrent >= torrent_iv)
+        ):
             log.info("Scheduler starting mode=torrent-index")
             try:
                 await run_pipeline(cfg, mode="torrent-index")
@@ -76,24 +157,20 @@ async def run_scheduler(cfg: AppConfig, *, once: bool = False) -> None:
             ran_anything = True
             await asyncio.sleep(min(30.0, batch_pause))
 
-        # data.* indexes (seeded separately; site crawler never follows data hosts)
-        if cfg.data.enabled and (time.time() - last_data >= data_iv):
-            log.info("Scheduler starting mode=data")
-            try:
-                await run_pipeline(cfg, mode="data")
-            except Exception:  # noqa: BLE001
-                log.exception("Scheduler mode data failed")
-            last_data = time.time()
-            ran_anything = True
-            await asyncio.sleep(min(30.0, batch_pause))
-
-        # Site: always run when due, or keep draining while continuous + pending
+        # Lowest priority among crawl modes: main site (skipped while data pending)
         while cfg.site.enabled:
             db = StateDB.from_config(cfg)
             try:
+                pending_data = _pending_data_indexes(db) if cfg.data.enabled else 0
                 pending_articles, pending_other = _pending_followable(db)
             finally:
                 db.close()
+            if continuous and pending_data > 0:
+                log.info(
+                    "Deferring site crawl; %d data indexes still pending",
+                    pending_data,
+                )
+                break
             pending_total = pending_articles + pending_other
             due = (time.time() - last_site) >= site_iv
             first_run = last_site == 0.0
@@ -147,11 +224,21 @@ async def run_scheduler(cfg: AppConfig, *, once: bool = False) -> None:
                 log.info("Site pending queue drained")
                 break
 
-            # Do not starve data/torrent: yield after each site batch when they are due.
-            # data.* is NOT discovered by the site crawler — DataMirror runs as mode=data.
+            # Prefer data.*: yield site as soon as data has pending work or is due.
             now_chk = time.time()
-            data_due = cfg.data.enabled and (now_chk - last_data >= data_iv)
-            torrent_due = cfg.torrent.enabled and (now_chk - last_torrent >= torrent_iv)
+            db = StateDB.from_config(cfg)
+            try:
+                pending_data = _pending_data_indexes(db) if cfg.data.enabled else 0
+            finally:
+                db.close()
+            data_due = cfg.data.enabled and (
+                pending_data > 0 or (now_chk - last_data >= data_iv)
+            )
+            torrent_due = (
+                cfg.torrent.enabled
+                and pending_data == 0
+                and (now_chk - last_torrent >= torrent_iv)
+            )
             if data_due or torrent_due:
                 log.info(
                     "Yielding site drain (articles=%d other=%d) for due jobs "
@@ -207,13 +294,14 @@ async def run_scheduler(cfg: AppConfig, *, once: bool = False) -> None:
         sleep_for = max(30.0, next_due - now)
         if continuous:
             sleep_for = min(sleep_for, idle_sleep)
-            # If anything is still pending, wake sooner
+            # Wake sooner for data pending (priority) or site pending
             db = StateDB.from_config(cfg)
             try:
+                pending_data = _pending_data_indexes(db) if cfg.data.enabled else 0
                 pa, po = _pending_followable(db)
             finally:
                 db.close()
-            if pa + po > 0:
+            if pending_data > 0 or pa + po > 0:
                 sleep_for = min(sleep_for, batch_pause)
 
         log.info(
