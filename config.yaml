@@ -17,6 +17,8 @@ storage:
   secure: true
   region: null
   prefix: ""
+  # HTTP bodies stream to storage. This path only holds leftover files and
+  # is cleared on startup. Torrent payloads still use torrent.download_dir.
   staging_dir: ./staging
   # Only used when backend: local
   mirror_root: ./mirror

@@ -12,6 +12,7 @@ storage:
   secure: false
   region: null
   prefix: ""
+  # HTTP bodies stream to MinIO. Cleared on startup. Torrents still use download_dir.
   staging_dir: /data/staging
   mirror_root: /data/mirror
 

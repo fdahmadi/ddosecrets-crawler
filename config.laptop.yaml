@@ -14,6 +14,7 @@ storage:
   secure: false
   region: null
   prefix: ""
+  # HTTP bodies stream to storage. Cleared on startup. Torrents still use download_dir.
   staging_dir: ./staging
   mirror_root: ./mirror
 

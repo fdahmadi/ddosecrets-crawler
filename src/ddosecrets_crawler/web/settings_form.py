@@ -45,7 +45,7 @@ FORM_GROUPS: list[dict[str, Any]] = [
             },
             {
                 "key": "staging_dir",
-                "label": "Local staging dir (temp downloads)",
+                "label": "Legacy HTTP staging dir (downloads now stream to storage)",
                 "type": "text",
             },
         ],

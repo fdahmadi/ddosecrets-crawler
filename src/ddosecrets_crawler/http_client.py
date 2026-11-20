@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import io
 import logging
+import queue
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -49,6 +54,87 @@ class FetchResult:
         if raw and raw.isdigit():
             return int(raw)
         return len(self.content) if self.content is not None else None
+
+
+class _StreamReader(io.RawIOBase):
+    """Blocking reader fed by the async HTTP body. A short queue applies backpressure."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._queue: queue.Queue[bytes | BaseException | None] = queue.Queue(maxsize=4)
+        self._buf = bytearray()
+        self._eof = False
+        self._lock = threading.Lock()
+        self._failed: BaseException | None = None
+        self._consumer_done = threading.Event()
+
+    def readable(self) -> bool:
+        return True
+
+    def note_failure(self, exc: BaseException) -> None:
+        with self._lock:
+            if self._failed is None:
+                self._failed = exc
+
+    def mark_consumer_done(self) -> None:
+        self._consumer_done.set()
+
+    def feed(self, chunk: bytes) -> None:
+        if chunk:
+            self._put(chunk)
+
+    def finish(self) -> None:
+        self._put(None)
+
+    def fail(self, exc: BaseException) -> None:
+        # read() polls this flag, so a full queue cannot block the abort.
+        self.note_failure(exc)
+
+    def _put(self, item: bytes | BaseException | None) -> None:
+        while True:
+            with self._lock:
+                failed = self._failed
+            if isinstance(item, BaseException):
+                pass
+            elif failed is not None:
+                raise OSError(f"download aborted: {failed}")
+            if self._consumer_done.is_set():
+                return
+            try:
+                self._queue.put(item, timeout=0.25)
+                return
+            except queue.Full:
+                continue
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            size = 1024 * 1024
+        if size == 0:
+            return b""
+        while not self._eof and len(self._buf) < size:
+            with self._lock:
+                failed = self._failed
+            if failed is not None:
+                self._eof = True
+                raise OSError(f"download aborted: {failed}")
+            try:
+                item = self._queue.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            if isinstance(item, BaseException):
+                self._eof = True
+                raise item
+            if item is None:
+                self._eof = True
+                break
+            self._buf.extend(item)
+        if len(self._buf) <= size:
+            out = bytes(self._buf)
+            self._buf.clear()
+            return out
+        out = bytes(self._buf[:size])
+        del self._buf[:size]
+        return out
 
 
 class PoliteHttpClient:
@@ -209,27 +295,100 @@ class PoliteHttpClient:
         storage,
         key: str,
         *,
-        staging_dir: Path,
         expected_size: int | None = None,
-        resume: bool = True,
         content_type: str | None = None,
     ) -> dict[str, Any]:
-        """Download to local staging, then upload to mirror storage (MinIO/local)."""
-        from .storage import staging_temp_path
+        """Stream the response body into storage without keeping the object on disk."""
+        await self.limiter.wait()
+        async with self._client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            etag = resp.headers.get("etag")
+            last_modified = resp.headers.get("last-modified")
+            response_type = resp.headers.get("content-type")
+            cl = resp.headers.get("content-length")
+            content_length = int(cl) if cl and cl.isdigit() else None
+            if (
+                expected_size is not None
+                and content_length is not None
+                and expected_size != content_length
+            ):
+                raise OSError(
+                    f"Size mismatch for {url}: "
+                    f"response {content_length}, expected {expected_size}"
+                )
+            length = content_length if content_length is not None else expected_size
+            stored_type = content_type or response_type
 
-        staging_dir = Path(staging_dir)
-        staging_dir.mkdir(parents=True, exist_ok=True)
-        dest = staging_temp_path(staging_dir, key)
-        meta = await self.download_to(
-            url, dest, expected_size=expected_size, resume=resume
-        )
-        storage.put_file(
-            key, dest, content_type=content_type or meta.get("content_type")
-        )
-        try:
-            dest.unlink(missing_ok=True)
-            part = dest.with_suffix(dest.suffix + ".part")
-            part.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return meta
+            if length == 0:
+                async for chunk in resp.aiter_raw(1024 * 1024):
+                    if chunk:
+                        raise OSError(f"Expected empty body for {url}")
+                await asyncio.to_thread(
+                    storage.put_stream,
+                    key,
+                    io.BytesIO(b""),
+                    length=0,
+                    content_type=stored_type,
+                )
+                return {
+                    "status_code": resp.status_code,
+                    "bytes": 0,
+                    "etag": etag,
+                    "last_modified": last_modified,
+                    "content_type": response_type,
+                    "content_length": 0,
+                }
+
+            reader = _StreamReader()
+
+            def _upload() -> None:
+                try:
+                    storage.put_stream(
+                        key,
+                        reader,
+                        length=length,
+                        content_type=stored_type,
+                    )
+                except BaseException as exc:
+                    reader.note_failure(exc)
+                    raise
+                finally:
+                    reader.mark_consumer_done()
+
+            upload_task = asyncio.create_task(asyncio.to_thread(_upload))
+            written = 0
+            try:
+                async for chunk in resp.aiter_raw(1024 * 1024):
+                    if upload_task.done():
+                        await upload_task
+                    if not chunk:
+                        continue
+                    written += len(chunk)
+                    await asyncio.to_thread(reader.feed, chunk)
+                if content_length is not None and written != content_length:
+                    raise OSError(
+                        f"Incomplete download {url}: {written}/{content_length}"
+                    )
+                if expected_size is not None and written != expected_size:
+                    raise OSError(
+                        f"Incomplete download {url}: {written}/{expected_size}"
+                    )
+                await asyncio.to_thread(reader.finish)
+                await upload_task
+            except BaseException as exc:
+                fail_exc = exc if isinstance(exc, Exception) else OSError(str(exc))
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(reader.fail, fail_exc)
+                if not upload_task.done():
+                    with contextlib.suppress(Exception):
+                        await upload_task
+                raise
+
+        return {
+            "status_code": resp.status_code,
+            "bytes": written,
+            "etag": etag,
+            "last_modified": last_modified,
+            "content_type": response_type,
+            "content_length": content_length if content_length is not None else written,
+        }

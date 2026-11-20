@@ -57,6 +57,15 @@ class MirrorStorage(Protocol):
         content_type: str | None = None,
     ) -> None: ...
 
+    def put_stream(
+        self,
+        key: str,
+        stream: BinaryIO,
+        *,
+        length: int | None = None,
+        content_type: str | None = None,
+    ) -> None: ...
+
     def list_dir(self, prefix: str = "") -> list[StorageEntry]: ...
 
     def list_hosts(self, section: str) -> list[str]: ...
@@ -101,6 +110,23 @@ def data_file_object_key(url: str) -> str:
 def guess_content_type(key: str, fallback: str | None = None) -> str:
     ctype, _ = mimetypes.guess_type(key)
     return ctype or fallback or "application/octet-stream"
+
+
+# S3 allows at most 10_000 parts. 8 MiB is the floor (above the 5 MiB minimum).
+_MIN_PART_BYTES = 8 * 1024 * 1024
+_UNKNOWN_LENGTH_PART_BYTES = 64 * 1024 * 1024
+_MAX_MULTIPART_PARTS = 10_000
+
+
+def multipart_part_size(length: int | None) -> int:
+    """Pick a part size that stays within the S3 10_000-part limit."""
+    if length is None or length <= 0:
+        return _UNKNOWN_LENGTH_PART_BYTES
+    needed = (length + _MAX_MULTIPART_PARTS - 1) // _MAX_MULTIPART_PARTS
+    align = 1024 * 1024
+    if needed % align:
+        needed += align - (needed % align)
+    return max(_MIN_PART_BYTES, needed)
 
 
 class LocalMirrorStorage:
@@ -167,6 +193,33 @@ class LocalMirrorStorage:
         dest = self._path(key)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(Path(path).read_bytes())
+
+    def put_stream(
+        self,
+        key: str,
+        stream: BinaryIO,
+        *,
+        length: int | None = None,
+        content_type: str | None = None,
+    ) -> None:
+        dest = self._path(key)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + ".part")
+        written = 0
+        try:
+            with tmp.open("wb") as fh:
+                while True:
+                    chunk = stream.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    written += len(chunk)
+            if length is not None and written != length:
+                raise OSError(f"Incomplete stream for {key}: {written}/{length}")
+            tmp.replace(dest)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def list_dir(self, prefix: str = "") -> list[StorageEntry]:
         prefix = normalize_key(prefix) if prefix else ""
@@ -342,6 +395,39 @@ class MinioMirrorStorage:
             content_type=ctype,
         )
 
+    def put_stream(
+        self,
+        key: str,
+        stream: BinaryIO,
+        *,
+        length: int | None = None,
+        content_type: str | None = None,
+    ) -> None:
+        """Multipart-upload a readable stream. Unknown length uses length=-1."""
+        import io
+
+        ctype = content_type or guess_content_type(key)
+        object_name = self._object_name(key)
+        if length == 0:
+            self.client.put_object(
+                self.bucket,
+                object_name,
+                io.BytesIO(b""),
+                length=0,
+                content_type=ctype,
+            )
+            return
+        size = -1 if length is None else length
+        self.client.put_object(
+            self.bucket,
+            object_name,
+            stream,
+            length=size,
+            content_type=ctype,
+            part_size=multipart_part_size(None if size < 0 else size),
+            num_parallel_uploads=1,
+        )
+
     def list_dir(self, prefix: str = "") -> list[StorageEntry]:
         prefix = normalize_key(prefix) if prefix else ""
         object_prefix = self._object_name(prefix)
@@ -441,7 +527,28 @@ def build_storage(cfg) -> MirrorStorage:
     return store
 
 
-def staging_temp_path(staging_dir: Path, key: str) -> Path:
-    staging_dir.mkdir(parents=True, exist_ok=True)
-    safe = normalize_key(key).replace("/", "__")
-    return staging_dir / safe
+def discard_http_staging_files(staging_dir: Path) -> tuple[int, int]:
+    """Delete leftover HTTP downloads. Torrent data under torrents/ is kept."""
+    staging_dir = Path(staging_dir)
+    if not staging_dir.is_dir():
+        return 0, 0
+    freed = 0
+    count = 0
+    for child in staging_dir.iterdir():
+        if child.name == "torrents" or not child.is_file():
+            continue
+        try:
+            size = child.stat().st_size
+            child.unlink()
+        except OSError as exc:
+            log.warning("Could not remove staging file %s: %s", child, exc)
+            continue
+        freed += size
+        count += 1
+    if count:
+        log.info(
+            "Removed %d leftover HTTP staging file(s), freed %.2f GiB",
+            count,
+            freed / (1024**3),
+        )
+    return freed, count

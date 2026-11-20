@@ -282,6 +282,11 @@ def load_config(path: str | Path) -> AppConfig:
 
 
 def ensure_runtime_dirs(cfg: AppConfig) -> None:
+    # Free disk before creating anything else. HTTP objects are streamed to
+    # storage; files left here are incomplete downloads from the old path.
+    from .storage import discard_http_staging_files
+
+    discard_http_staging_files(cfg.staging_path)
     Path(cfg.logging.file).parent.mkdir(parents=True, exist_ok=True)
     cfg.staging_path.mkdir(parents=True, exist_ok=True)
     Path(cfg.torrent.download_dir).mkdir(parents=True, exist_ok=True)

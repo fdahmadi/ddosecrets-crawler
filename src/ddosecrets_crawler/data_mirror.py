@@ -405,9 +405,7 @@ class DataMirror:
                 url,
                 self.storage,
                 key,
-                staging_dir=self.cfg.staging_path,
                 expected_size=content_length,
-                resume=True,
             )
             self.db.upsert_resource(
                 url=url,
